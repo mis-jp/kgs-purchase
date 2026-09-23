@@ -58,6 +58,9 @@ deploy-output.log
 .next-backup/
 .next-incoming/
 .next-stale-*/
+.watchdog-pause
+.watchdog-last-restart
+.watchdog-lock
 
 # local workflow drafts (not deployable Actions)
 .github/workflows/*.yml.local

@@ -37,7 +37,7 @@ foreach ($child in $repoChildren) {
     & icacls $childPath /grant "${account}:(OI)(CI)M" /T | Out-Null
 }
 
-$serviceName = 'actions.runner.its269-KGS-PURCHASE.ECS-612B'
+$serviceName = 'actions.runner.mis-jp-kgs-purchase.kgs-purchase-runner'
 $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($svc) {
     if ($svc.Status -ne 'Running') {

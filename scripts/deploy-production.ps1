@@ -31,7 +31,10 @@ Set-Location $RepoPath
 Write-Host "Deploy target: $RepoPath"
 Write-Host "Public URL   : http://190.92.233.232/kgs-purchase/signin"
 
+$pauseFile = Join-Path $RepoPath '.watchdog-pause'
 try {
+    Set-Content -LiteralPath $pauseFile -Value (Get-Date -Format o) -Encoding ASCII
+    Write-Host "Watchdog paused: $pauseFile"
     if (-not $SkipPull) {
         Write-Step "Pull latest code"
         git -c safe.directory=C:/Users/Administrator/Desktop/Github/KGS-PURCHASE fetch origin main
@@ -181,4 +184,8 @@ catch {
     pm2 status
     Write-Host "Rollback complete" -ForegroundColor Yellow
     exit 1
+}
+finally {
+    Remove-Item -LiteralPath $pauseFile -Force -ErrorAction SilentlyContinue
+    Write-Host "Watchdog pause cleared"
 }
