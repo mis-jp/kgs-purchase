@@ -2990,7 +2990,7 @@ export const MySqlService = {
                     const onHand = Number(onHandMap.get(key)) || 0;
                     itemMap.set(key, {
                         inventoryId: cat?.inventoryId || key,
-                        description: cat?.description || "—",
+                        description: cat?.description || "",
                         itemStatus: "ACTIVE",
                         itemClass: cat?.itemClass || "",
                         totalOnHand: onHand,
@@ -3003,6 +3003,26 @@ export const MySqlService = {
                 }
             }
 
+            const nameless = [...itemMap.entries()].filter(([, item]) =>
+                this._blankProductName(item.description) || !String(item.itemClass || "").trim()
+            );
+            if (nameless.length > 0) {
+                const names = await this.getProductNameMap(
+                    nameless.map(([key]) => key),
+                    isEcomBranch ? "ecommerce" : effectiveCompanyId
+                );
+                for (const [key, item] of nameless) {
+                    const meta = names.get(key);
+                    if (!meta) continue;
+                    if (this._blankProductName(item.description) && !this._blankProductName(meta.description)) {
+                        item.description = meta.description;
+                    }
+                    if (!String(item.itemClass || "").trim() && meta.itemClass) {
+                        item.itemClass = meta.itemClass;
+                    }
+                }
+            }
+
             return [...itemMap.values()];
         } catch (err) {
             console.error("[MySQL getReplenishmentItems Error]", err);
@@ -3010,27 +3030,153 @@ export const MySqlService = {
         }
     },
 
+    _blankProductName(value) {
+        const text = String(value ?? "").trim();
+        return !text || text === "—" || text === "-";
+    },
+
+    /**
+     * Product name + class for SKUs. Names live on forecast stock (any warehouse)
+     * and on the CMS one-row product table — not only on __catalog__ warehouse rows.
+     */
+    async getProductNameMap(inventoryIds = [], companyId = "main") {
+        const keys = [...new Set((inventoryIds || []).map((id) => normalizeInvKey(id)).filter(Boolean))];
+        const map = new Map();
+        if (!keys.length) return map;
+
+        const apply = (rows) => {
+            for (const row of rows || []) {
+                const key = normalizeInvKey(row.inventoryId);
+                if (!key) continue;
+                const prev = map.get(key) || {
+                    inventoryId: String(row.inventoryId || "").trim(),
+                    description: "",
+                    itemClass: "",
+                };
+                const description = String(row.description || "").trim();
+                const itemClass = String(row.itemClass || "").trim();
+                if (this._blankProductName(prev.description) && !this._blankProductName(description)) {
+                    prev.description = description;
+                    if (row.inventoryId) prev.inventoryId = String(row.inventoryId).trim();
+                }
+                if (!prev.itemClass && itemClass) prev.itemClass = itemClass;
+                map.set(key, prev);
+            }
+        };
+
+        const CHUNK = 400;
+        for (let i = 0; i < keys.length; i += CHUNK) {
+            const chunk = keys.slice(i, i + CHUNK);
+            const placeholders = chunk.map(() => "?").join(", ");
+            try {
+                const [cmsRows] = await pool.query(
+                    `SELECT TRIM(inventory_id) AS inventoryId,
+                            MAX(NULLIF(TRIM(inventory_name), '')) AS description,
+                            MAX(NULLIF(TRIM(item_class), '')) AS itemClass
+                     FROM \`${INVENTORY_VIEW_TABLE}\`
+                     WHERE company_id = ?
+                       AND UPPER(REPLACE(TRIM(inventory_id), ' ', '')) IN (${placeholders})
+                     GROUP BY TRIM(inventory_id)`,
+                    [companyId, ...chunk]
+                );
+                apply(cmsRows);
+            } catch (err) {
+                console.warn("[MySQL getProductNameMap CMS]", err.message);
+            }
+            try {
+                await this.ensureForecastItemStockTable();
+                const [stockRows] = await purchasePool.query(
+                    `SELECT TRIM(inventory_id) AS inventoryId,
+                            MAX(NULLIF(TRIM(item_name), '')) AS description,
+                            MAX(NULLIF(TRIM(item_class), '')) AS itemClass
+                     FROM \`${FORECAST_STOCK_TABLE}\`
+                     WHERE company_id = ?
+                       AND UPPER(REPLACE(TRIM(inventory_id), ' ', '')) IN (${placeholders})
+                     GROUP BY TRIM(inventory_id)`,
+                    [companyId, ...chunk]
+                );
+                apply(stockRows);
+            } catch (err) {
+                console.warn("[MySQL getProductNameMap forecast]", err.message);
+            }
+        }
+        return map;
+    },
+
+    /**
+     * Fill blank replenishment product names from forecast stock and the CMS catalog.
+     * Branch rows were stored with an empty description after stock moved off the one-SKU table.
+     */
+    async backfillReplenishmentProductNames(companyId = "main", branchId = "") {
+        const branch = String(branchId || "").trim();
+        if (!branch) return 0;
+        await this.ensureReplenishmentCacheTable();
+        await this.ensureForecastItemStockTable();
+        const inventoryDb = process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory";
+        const blankSql = `(description IS NULL OR TRIM(description) = '' OR description IN ('—', '-'))`;
+        try {
+            const [[blank]] = await purchasePool.query(
+                `SELECT COUNT(*) AS c FROM replenishment_cache
+                 WHERE company_id = ? AND branch_id = ? AND ${blankSql}`,
+                [companyId, branch]
+            );
+            if (!Number(blank?.c)) return 0;
+
+            const setName = `
+                SET c.description = n.item_name,
+                    c.item_class = IF(
+                        c.item_class IS NULL OR TRIM(c.item_class) = '',
+                        COALESCE(n.item_class, c.item_class),
+                        c.item_class
+                    )`;
+            const whereBlank = `
+                WHERE c.company_id = ? AND c.branch_id = ?
+                  AND ${blankSql}
+                  AND n.item_name IS NOT NULL`;
+
+            const [fromStock] = await purchasePool.query(
+                `UPDATE replenishment_cache c
+                 JOIN (
+                    SELECT UPPER(REPLACE(TRIM(inventory_id), ' ', '')) AS inv_key,
+                           MAX(NULLIF(TRIM(item_name), '')) AS item_name,
+                           MAX(NULLIF(TRIM(item_class), '')) AS item_class
+                    FROM \`${FORECAST_STOCK_TABLE}\`
+                    WHERE company_id = ?
+                    GROUP BY UPPER(REPLACE(TRIM(inventory_id), ' ', ''))
+                 ) n ON UPPER(REPLACE(TRIM(c.inventory_id), ' ', '')) = n.inv_key
+                 ${setName}
+                 ${whereBlank}`,
+                [companyId, companyId, branch]
+            );
+
+            const [fromCms] = await purchasePool.query(
+                `UPDATE replenishment_cache c
+                 JOIN (
+                    SELECT UPPER(REPLACE(TRIM(inventory_id), ' ', '')) AS inv_key,
+                           MAX(NULLIF(TRIM(inventory_name), '')) AS item_name,
+                           MAX(NULLIF(TRIM(item_class), '')) AS item_class
+                    FROM \`${inventoryDb}\`.\`${INVENTORY_SYNC_TABLE}\`
+                    WHERE company_id = ?
+                    GROUP BY UPPER(REPLACE(TRIM(inventory_id), ' ', ''))
+                 ) n ON UPPER(REPLACE(TRIM(c.inventory_id), ' ', '')) = n.inv_key
+                 ${setName}
+                 ${whereBlank}`,
+                [companyId, companyId, branch]
+            );
+            return (Number(fromStock?.affectedRows) || 0) + (Number(fromCms?.affectedRows) || 0);
+        } catch (err) {
+            console.warn("[MySQL backfillReplenishmentProductNames]", err.message);
+            return 0;
+        }
+    },
+
     /**
      * Fetch catalog metadata for a list of inventory IDs (uppercase keys).
      */
     async getCatalogItemsByIds(itemIds = [], companyId = "main") {
-        const keys = [...new Set(
-            (itemIds || [])
-                .map((id) => String(id || "").toUpperCase().trim())
-                .filter(Boolean)
-        )];
-        if (!keys.length) return [];
-
         try {
-            const placeholders = keys.map(() => "?").join(", ");
-            const [rows] = await pool.query(
-                `SELECT TRIM(inventory_id) AS inventoryId, inventory_name AS description, item_class AS itemClass
-                 FROM \`${INVENTORY_VIEW_TABLE}\`
-                 WHERE company_id = ? AND default_warehouse = '__catalog__'
-                   AND UPPER(TRIM(inventory_id)) IN (${placeholders})`,
-                [companyId, ...keys]
-            );
-            return rows;
+            const map = await this.getProductNameMap(itemIds, companyId);
+            return [...map.values()];
         } catch (err) {
             console.error("[MySQL getCatalogItemsByIds Error]", err);
             return [];
@@ -6506,6 +6652,7 @@ export const MySqlService = {
         itemClass = "",
     } = {}) {
         await this.ensureReplenishmentCacheTable();
+        await this.backfillReplenishmentProductNames(companyId, branchId);
         try {
             const filters = {
                 search: String(search || "").trim(),
@@ -6550,23 +6697,24 @@ export const MySqlService = {
                 this.cacheRowToRecommendation(row, offset + i, { slim })
             );
 
-            // Backfill item class for older cache rows written before item_class existed
-            const missingClassIds = recommendations
-                .filter((r) => !String(r.itemClass || "").trim())
-                .map((r) => r.itemId)
-                .filter(Boolean);
-            if (missingClassIds.length > 0) {
-                const catalog = await this.getCatalogItemsByIds(missingClassIds, companyId);
-                const classById = new Map(
-                    catalog.map((c) => [
-                        String(c.inventoryId || "").toUpperCase().trim(),
-                        c.itemClass || "",
-                    ])
+            const needsMeta = recommendations.filter(
+                (r) => this._blankProductName(r.description) || !String(r.itemClass || "").trim()
+            );
+            if (needsMeta.length > 0) {
+                const names = await this.getProductNameMap(
+                    needsMeta.map((r) => r.itemId),
+                    companyId
                 );
                 recommendations = recommendations.map((r) => {
-                    if (String(r.itemClass || "").trim()) return r;
-                    const key = String(r.itemId || "").toUpperCase().trim();
-                    return { ...r, itemClass: classById.get(key) || "" };
+                    const meta = names.get(normalizeInvKey(r.itemId));
+                    if (!meta) return r;
+                    return {
+                        ...r,
+                        description: this._blankProductName(r.description) && !this._blankProductName(meta.description)
+                            ? meta.description
+                            : r.description,
+                        itemClass: String(r.itemClass || "").trim() || meta.itemClass || "",
+                    };
                 });
             }
 

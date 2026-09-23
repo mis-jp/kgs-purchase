@@ -113,7 +113,7 @@ async function loadCachedPage(effectiveCompanyId, branch, {
     const priorityKey = String(priority || "").trim().toLowerCase().slice(0, 20);
     const classKey = String(itemClass || "").trim().toLowerCase().slice(0, 80);
     const overlayKey = liveOverlay ? "live" : "cache";
-    const memKey = `replenishment:api:${effectiveCompanyId}:${branchKey}:${page}:${pageSize}:${searchKey}:${priorityKey}:${classKey}:${overlayKey}`;
+    const memKey = `replenishment:api:names:${effectiveCompanyId}:${branchKey}:${page}:${pageSize}:${searchKey}:${priorityKey}:${classKey}:${overlayKey}`;
 
     if (bypassMemCache) {
         invalidateCache(`replenishment:api:${effectiveCompanyId}:${branchKey}`);
