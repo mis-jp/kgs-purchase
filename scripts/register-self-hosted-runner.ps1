@@ -1,9 +1,9 @@
 <#
 Registers and starts a self-hosted GitHub Actions runner for KGS-PURCHASE on this Windows server.
 
-ONE-TIME SETUP (run on production server 190.92.233.232 as Administrator):
+ONE-TIME SETUP (run on production server as Administrator):
 
-  1. Open: https://github.com/its269/KGS-PURCHASE/settings/actions/runners/new?arch=x64&os=win
+  1. Open: https://github.com/mis-jp/kgs-purchase/settings/actions/runners/new?arch=x64&os=win
   2. Copy the registration token (expires in ~1 hour)
   3. Run:
 
@@ -11,11 +11,11 @@ ONE-TIME SETUP (run on production server 190.92.233.232 as Administrator):
      .\scripts\register-self-hosted-runner.ps1 -RegistrationToken "PASTE_TOKEN_HERE"
 
 After the runner shows "Idle" on GitHub, every push to main auto-deploys to:
-  http://190.92.233.232/kgs-purchase/signin
+  https://kelinconnect.com/kgs-purchase/signin
 #>
 param(
     [Parameter(Mandatory = $false)]
-    [string]$OwnerRepo = "its269/KGS-PURCHASE",
+    [string]$OwnerRepo = "mis-jp/kgs-purchase",
 
     [Parameter(Mandatory = $false)]
     [string]$RegistrationToken = "",
@@ -23,7 +23,7 @@ param(
     [string]$RunnerName = "kgs-purchase-runner",
     [string]$RunnerLabels = "self-hosted,windows",
     [string]$RunnerVersion = "v2.323.0",
-    [string]$InstallPath = "C:\actions-runner-kgs-purchase"
+    [string]$InstallPath = "C:\Users\Administrator\Desktop\Github\KGS-PURCHASE\actions-runner"
 )
 
 function Assert-Admin {
