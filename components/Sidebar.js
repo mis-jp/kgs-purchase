@@ -329,6 +329,7 @@ export default function Sidebar() {
           className="sidebar-collapse-btn"
           onClick={toggleCollapse}
           aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          suppressHydrationWarning
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

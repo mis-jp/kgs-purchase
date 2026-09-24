@@ -30,6 +30,9 @@ export default function AdminPage() {
     const [profile, setProfile] = useState({ username: "", fullName: "", email: "" });
     const [savingProfile, setSavingProfile] = useState(false);
     const [branchOptions, setBranchOptions] = useState([]);
+    const [salesMonths, setSalesMonths] = useState("3");
+    const [salesUnit, setSalesUnit] = useState("months");
+    const [savingWindow, setSavingWindow] = useState(false);
     const [branchMenuOpen, setBranchMenuOpen] = useState(false);
     const [branchQuery, setBranchQuery] = useState("");
     const branchPickerRef = useRef(null);
@@ -53,10 +56,11 @@ export default function AdminPage() {
         setLoading(true);
         setError("");
         try {
-            const [sessionRes, usersRes, branchesRes] = await Promise.all([
+            const [sessionRes, usersRes, branchesRes, windowRes] = await Promise.all([
                 fetchWithAuth("/api/auth/session"),
                 fetchWithAuth("/api/admin/users"),
                 fetchWithAuth("/api/branches"),
+                fetchWithAuth("/api/admin/replenishment-window"),
             ]);
 
             if (sessionRes.status === 401) {
@@ -67,6 +71,13 @@ export default function AdminPage() {
             if (!sessionData?.user || sessionData.user.role !== "admin") {
                 router.replace("/dashboard");
                 return;
+            }
+            if (windowRes.ok) {
+                const windowData = await windowRes.json();
+                if (windowData?.value || windowData?.months) {
+                    setSalesMonths(String(windowData.value ?? windowData.months));
+                    setSalesUnit(windowData.unit === "days" ? "days" : "months");
+                }
             }
             setMe(sessionData.user);
             setProfile({
@@ -263,6 +274,29 @@ export default function AdminPage() {
         }
     };
 
+    const handleSaveSalesWindow = async (event) => {
+        event.preventDefault();
+        setSavingWindow(true);
+        setError("");
+        setNotice("");
+        try {
+            const res = await fetchWithAuth("/api/admin/replenishment-window", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ value: Number(salesMonths), unit: salesUnit }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.message || "Failed to update the sales window");
+            setSalesMonths(String(data.value ?? data.months ?? salesMonths));
+            setSalesUnit(data.unit === "days" ? "days" : "months");
+            setNotice(data.message || "Replenishment sales window updated.");
+        } catch (err) {
+            setError(err.message || "Failed to update the sales window");
+        } finally {
+            setSavingWindow(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="admin-root">
@@ -282,6 +316,40 @@ export default function AdminPage() {
 
             {error && <div className="admin-alert admin-alert--error" role="alert">{error}</div>}
             {notice && <div className="admin-alert admin-alert--ok" role="status">{notice}</div>}
+
+            <section className="admin-card">
+                <h2>Replenishment sales window</h2>
+                <p className="admin-header-hint">
+                    Sells per day, days left, and order quantity use this sales window for every branch.
+                    The default is 3 months. Choose days or months, then save to recalculate Replenishment.
+                </p>
+                <form className="admin-form" onSubmit={handleSaveSalesWindow}>
+                    <div className="admin-form-grid">
+                        <label>
+                            Amount
+                            <input
+                                type="number"
+                                min={1}
+                                max={salesUnit === "days" ? 720 : 24}
+                                step={1}
+                                value={salesMonths}
+                                onChange={(e) => setSalesMonths(e.target.value)}
+                                required
+                            />
+                        </label>
+                        <label>
+                            Unit
+                            <select value={salesUnit} onChange={(e) => setSalesUnit(e.target.value === "days" ? "days" : "months")}>
+                                <option value="months">Months</option>
+                                <option value="days">Days</option>
+                            </select>
+                        </label>
+                    </div>
+                    <button type="submit" className="admin-btn" disabled={savingWindow}>
+                        {savingWindow ? "Updating…" : "Update all branches"}
+                    </button>
+                </form>
+            </section>
 
             <section className="admin-card">
                 <h2>My account</h2>

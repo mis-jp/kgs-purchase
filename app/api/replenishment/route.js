@@ -341,11 +341,14 @@ export async function GET(request) {
             liveOverlay: false,
         });
 
+        const salesWindow = await MySqlService.getReplenishmentSalesWindow();
         const cacheVersion = Number(cachedPage?.meta?.salesLogicVersion) || 0;
+        const cacheLookback = Number(cachedPage?.meta?.salesLookbackDays) || 0;
         const versionOk = cacheVersion === REPLENISHMENT_SALES_LOGIC_VERSION;
+        const windowOk = cacheLookback === salesWindow.days;
         const hasCache = cachedPage?.meta?.itemCount != null || cachedPage?.recommendations;
 
-        if (hasCache && !versionOk) {
+        if (hasCache && (!versionOk || !windowOk)) {
             return await serveLiveReplenishment({
                 branch,
                 companyId,

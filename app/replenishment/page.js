@@ -460,6 +460,11 @@ export default function ReplenishmentPage() {
     const [page, setPage] = useState(1);
     const [orderQtyDrafts, setOrderQtyDrafts] = useState({});
     const [qtySaveHint, setQtySaveHint] = useState("");
+    const [salesMonths, setSalesMonths] = useState("3");
+    const [salesUnit, setSalesUnit] = useState("months");
+    const [savingWindow, setSavingWindow] = useState(false);
+    const [windowNotice, setWindowNotice] = useState("");
+    const isAdmin = isLocalAdminUser();
     const fetchGenRef = useRef(0);
     const listKeyRef = useRef("");
     const saveTimers = useRef({});
@@ -605,6 +610,24 @@ export default function ReplenishmentPage() {
         localStorage.setItem("repl_item_class", itemClassFilter);
         localStorage.setItem("repl_priority", priorityFilter);
     }, [viewMode, selectedBranch, search, itemClassFilter, priorityFilter]);
+
+    useEffect(() => {
+        let active = true;
+        (async () => {
+            try {
+                const res = await fetchWithAuth("/api/admin/replenishment-window");
+                if (!res.ok || !active) return;
+                const data = await res.json();
+                if (data?.value || data?.months) {
+                    setSalesMonths(String(data.value ?? data.months));
+                    setSalesUnit(data.unit === "days" ? "days" : "months");
+                }
+            } catch {
+                /* keep the 3-month default */
+            }
+        })();
+        return () => { active = false; };
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -911,6 +934,78 @@ export default function ReplenishmentPage() {
                         <span className="db-stat-value">{loading && recs.length === 0 ? "..." : stats.totalSuggested.toLocaleString()}</span>
                         <span className="db-stat-sub">{scopeLabel}</span>
                     </div>
+                    <form
+                        className="db-stat-card repl-stat-window"
+                        onSubmit={async (event) => {
+                            event.preventDefault();
+                            if (!isAdmin || savingWindow) return;
+                            setSavingWindow(true);
+                            setWindowNotice("");
+                            setError(null);
+                            try {
+                                const res = await fetchWithAuth("/api/admin/replenishment-window", {
+                                    method: "PUT",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ value: Number(salesMonths), unit: salesUnit }),
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (!res.ok) throw new Error(data.message || "Could not update the sales window");
+                                setSalesMonths(String(data.value ?? data.months ?? salesMonths));
+                                setSalesUnit(data.unit === "days" ? "days" : "months");
+                                setWindowNotice(data.message || "Updating every branch.");
+                                fetchRecommendations({
+                                    branchToFetch: activeBranch,
+                                    pageNum: 1,
+                                    forceRefresh: true,
+                                    isInitial: true,
+                                });
+                            } catch (err) {
+                                setError(err.message || "Could not update the sales window");
+                            } finally {
+                                setSavingWindow(false);
+                            }
+                        }}
+                    >
+                        <span className="db-stat-label">Sales window</span>
+                        <label className="repl-window-field">
+                            <input
+                                type="number"
+                                min={1}
+                                max={salesUnit === "days" ? 720 : 24}
+                                step={1}
+                                value={salesMonths}
+                                disabled={!isAdmin || savingWindow}
+                                onChange={(e) => setSalesMonths(e.target.value)}
+                                aria-label="Sales window amount"
+                            />
+                            <select
+                                className="repl-window-unit"
+                                value={salesUnit}
+                                disabled={!isAdmin || savingWindow}
+                                aria-label="Sales window unit"
+                                onChange={(e) => {
+                                    const next = e.target.value === "days" ? "days" : "months";
+                                    if (next === salesUnit) return;
+                                    const amount = Number(salesMonths) || 0;
+                                    setSalesMonths(String(next === "days"
+                                        ? Math.max(1, amount * 30)
+                                        : Math.max(1, Math.round(amount / 30))));
+                                    setSalesUnit(next);
+                                }}
+                            >
+                                <option value="months">Months</option>
+                                <option value="days">Days</option>
+                            </select>
+                        </label>
+                        <span className="db-stat-sub">
+                            {windowNotice || (isAdmin ? "Default is 3 months. Applies to every branch." : "Set by an admin. Default is 3 months.")}
+                        </span>
+                        {isAdmin ? (
+                            <button type="submit" className="repl-window-save" disabled={savingWindow}>
+                                {savingWindow ? "Updating…" : "Update"}
+                            </button>
+                        ) : null}
+                    </form>
                 </div>
 
                 <div className="repl-filter-tabs" data-tour="toolbar">
@@ -1125,7 +1220,7 @@ export default function ReplenishmentPage() {
                                                 at branch <strong>{selectedBranch}</strong> — not today&apos;s sales alone.
                                             </p>
                                             <p className="repl-col-info-formula">
-                                                Sells / day = Net units sold in the last 90 days at {selectedBranch} ÷ 90
+                                                Sells / day = Net units sold in the last {Number(meta?.salesLookbackDays) || 90} days at {selectedBranch} ÷ {Number(meta?.salesLookbackDays) || 90}
                                             </p>
                                             <p>
                                                 Uses this branch’s invoice sales first (credit memos subtracted). Network-wide

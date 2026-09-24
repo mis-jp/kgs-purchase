@@ -11,6 +11,63 @@
     overflow-x: clip;
 }
 
+.repl-stat-window {
+    justify-content: space-between;
+}
+
+.repl-stat-window:hover {
+    transform: none;
+}
+
+.repl-window-field {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    color: var(--text-primary);
+    font-size: 1.35rem;
+    font-weight: 700;
+}
+
+.repl-window-unit {
+    min-height: 42px;
+    padding: 0.2rem 0.4rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-medium);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 700;
+}
+
+.repl-window-field input {
+    width: 4.5rem;
+    min-height: 42px;
+    padding: 0.2rem 0.45rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-medium);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 1.75rem;
+    font-weight: 700;
+}
+
+.repl-window-save {
+    align-self: flex-start;
+    min-height: 32px;
+    padding: 0.25rem 0.75rem;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: var(--accent-primary);
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.repl-window-save:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
 .repl-summary {
     display: flex;
     flex-direction: column;

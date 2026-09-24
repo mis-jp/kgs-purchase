@@ -19,6 +19,7 @@ import {
     EXCLUDED_BRANCH_KEYWORDS,
 } from "@/lib/companies.js";
 import { SALES_LOOKBACK_DAYS, SQL_NET_QTY, SQL_NET_AMOUNT, SQL_GROSS_QTY, netQtySold, mergeBranchFirstSalesMaps } from "@/lib/sales-velocity.js";
+import { normalizeReplenishmentWindow } from "@/lib/replenishment-window.js";
 import { TARGET_DAYS_OF_COVER } from "@/lib/replenishment-insights.js";
 import { getCached, invalidateCache } from "@/lib/server-cache";
 import { FORECAST_ALL_BRANCH, forecastBranchKey, forecastSoldQty, listMonthsInRange, monthInvoiceCoverageComplete, normalizeInvKey } from "@/lib/forecast-generator.js";
@@ -5503,53 +5504,86 @@ export const MySqlService = {
         return map;
     },
 
-    /** Extended lookback gross sales when 90-day window has no invoice rows for a branch. */
-    async getAccurateReplenishmentSalesMap({ branch = "", companyId = "main" } = {}) {
+    async ensureAppSettingsTable() {
+        if (MySqlService._appSettingsReady) return true;
+        await purchasePool.query(`
+            CREATE TABLE IF NOT EXISTS app_settings (
+              setting_key VARCHAR(64) NOT NULL,
+              setting_value VARCHAR(255) NOT NULL,
+              updated_at DATETIME NULL,
+              PRIMARY KEY (setting_key)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        MySqlService._appSettingsReady = true;
+        return true;
+    },
+
+    /** Global Replenishment sales window. Default 3 months (90 days). */
+    async getReplenishmentSalesWindow() {
+        try {
+            await this.ensureAppSettingsTable();
+            const [rows] = await purchasePool.query(
+                `SELECT setting_key, setting_value
+                 FROM app_settings
+                 WHERE setting_key IN ('replenishment_sales_value', 'replenishment_sales_unit', 'replenishment_sales_months')`
+            );
+            const saved = Object.fromEntries(rows.map((row) => [row.setting_key, row.setting_value]));
+            return normalizeReplenishmentWindow({
+                value: saved.replenishment_sales_value ?? saved.replenishment_sales_months,
+                unit: saved.replenishment_sales_unit || (saved.replenishment_sales_months ? "months" : "months"),
+            });
+        } catch (err) {
+            console.warn("[MySQL getReplenishmentSalesWindow]", err.message);
+            return normalizeReplenishmentWindow({ value: 3, unit: "months" });
+        }
+    },
+
+    async setReplenishmentSalesWindow(input) {
+        const window = normalizeReplenishmentWindow(input);
+        await this.ensureAppSettingsTable();
+        const pairs = [
+            ["replenishment_sales_value", String(window.value)],
+            ["replenishment_sales_unit", window.unit],
+        ];
+        if (window.unit === "months") {
+            pairs.push(["replenishment_sales_months", String(window.value)]);
+        }
+        for (const [key, settingValue] of pairs) {
+            await purchasePool.query(
+                `INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                 VALUES (?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()`,
+                [key, settingValue]
+            );
+        }
+        return window;
+    },
+
+    /** Sales for replenishment using the admin sales window. The window is not stretched past that number. */
+    async getAccurateReplenishmentSalesMap({ branch = "", companyId = "main", lookbackDays = null } = {}) {
         const branchKey = String(branch || "MAIN").trim().toUpperCase() || "MAIN";
         const companyKey = String(companyId || "main");
-        // Watermark-aware TTL: invalidate when sales/inventory sync advances last_sync
+        const days = Number(lookbackDays) || (await this.getReplenishmentSalesWindow()).days;
         let watermark = "0";
         try {
             const wm = await this.getReplenishmentDataWatermark();
             watermark = wm ? new Date(wm).toISOString() : "0";
         } catch { /* ignore */ }
 
-        const cacheKey = `replSalesMap:v6:${companyKey}:${branchKey}:${watermark}`;
+        const cacheKey = `replSalesMap:v7:${companyKey}:${branchKey}:${days}:${watermark}`;
         return getCached(cacheKey, 300_000, () =>
-            this._getAccurateReplenishmentSalesMapUncached({ branch, companyId })
+            this._getAccurateReplenishmentSalesMapUncached({ branch, companyId, lookbackDays: days })
         );
     },
 
-    async _getAccurateReplenishmentSalesMapUncached({ branch = "", companyId = "main" } = {}) {
+    async _getAccurateReplenishmentSalesMapUncached({ branch = "", companyId = "main", lookbackDays = SALES_LOOKBACK_DAYS } = {}) {
         const isMain = !branch || String(branch).trim().toUpperCase() === "MAIN";
         const branchKey = String(branch || "").trim().toUpperCase();
-        const effectiveCompanyId = isMain ? companyId : resolveCompanyIdForBranch(companyId, branch);
-        let lookbackDays = SALES_LOOKBACK_DAYS;
-
-        const countPositive = (map) => {
-            let n = 0;
-            for (const v of map.values()) if ((v.qty_sold ?? 0) > 0) n++;
-            return n;
-        };
+        lookbackDays = parseInt(lookbackDays, 10) || SALES_LOOKBACK_DAYS;
 
         if (isMain) {
-            let result = await this.getRetailNetworkSalesSummary({ companyId, lookbackDays });
-            let map = result.map;
-            let count = countPositive(map);
-
-            if (count < 20) {
-                for (const days of [180, 365]) {
-                    const extended = await this.getRetailNetworkSalesSummary({ companyId, lookbackDays: days });
-                    const extCount = countPositive(extended.map);
-                    if (extCount > count) {
-                        map = extended.map;
-                        lookbackDays = days;
-                        count = extCount;
-                        result = extended;
-                    }
-                    if (count >= 20) break;
-                }
-            }
+            const result = await this.getRetailNetworkSalesSummary({ companyId, lookbackDays });
+            const map = result.map;
 
             return {
                 map,
@@ -5564,26 +5598,8 @@ export const MySqlService = {
         // against warehouse-only on-hand. Plan Manila metro demand from MANILA branch
         // (which aggregates related warehouse stock).
         if (isWarehouseLikeAlias(branchKey) && !isRetailReplenishmentBranch(branchKey)) {
-            let strict = await this.getReplenishmentSalesSummary({ branch: branchKey, lookbackDays });
-            let count = countPositive(strict.map);
-            let salesMode = strict.mode;
-
-            if (count < 20) {
-                for (const days of [180, 365]) {
-                    const extStrict = await this.getReplenishmentSalesSummary({
-                        branch: branchKey,
-                        lookbackDays: days,
-                    });
-                    const extCount = countPositive(extStrict.map);
-                    if (extCount > count) {
-                        strict = extStrict;
-                        lookbackDays = days;
-                        count = extCount;
-                        salesMode = extStrict.mode;
-                    }
-                    if (count >= 20) break;
-                }
-            }
+            const strict = await this.getReplenishmentSalesSummary({ branch: branchKey, lookbackDays });
+            const salesMode = strict.mode;
 
             const map = new Map();
             for (const [key, val] of strict.map) {
@@ -5607,31 +5623,8 @@ export const MySqlService = {
                 salesScope: "branch",
             });
         }
-        let count = countPositive(map);
-        let salesMode = strict.mode;
+        const salesMode = strict.mode;
         let salesScope = "branch";
-
-        if (count < 20) {
-            for (const days of [180, 365]) {
-                const extStrict = await this.getReplenishmentSalesSummary({ branch, lookbackDays: days });
-                const extMap = new Map();
-                for (const [key, val] of extStrict.map) {
-                    extMap.set(key, {
-                        qty_sold: netQtySold(val?.qty_sold),
-                        total_sales: Math.max(0, Number(val?.total_sales) || 0),
-                        salesScope: "branch",
-                    });
-                }
-                const extCount = countPositive(extMap);
-                if (extCount > count) {
-                    map = extMap;
-                    lookbackDays = days;
-                    count = extCount;
-                    salesMode = extStrict.mode;
-                }
-                if (count >= 20) break;
-            }
-        }
 
         return { map, salesScope, lookbackDays, salesMode };
     },
@@ -5838,10 +5831,11 @@ export const MySqlService = {
             watermark = wm ? new Date(wm).toISOString() : "0";
         } catch { /* ignore */ }
 
-        const cacheKey = `accurateRetailDemand:v5:${companyId}:${watermark}`;
+        const { days } = await this.getReplenishmentSalesWindow();
+        const cacheKey = `accurateRetailDemand:v6:${companyId}:${days}:${watermark}`;
         return getCached(cacheKey, 120_000, async () => {
             const [live, cached, suggestedTotals] = await Promise.all([
-                this._getAccurateRetailBranchDemandRollupUncached(companyId),
+                this._getAccurateRetailBranchDemandRollupUncached(companyId, days),
                 this.getRetailBranchDemandRollupFromCache(companyId),
                 this.getBranchSuggestedQtyTotals(companyId),
             ]);
@@ -5937,11 +5931,11 @@ export const MySqlService = {
         };
     },
 
-    async _getAccurateRetailBranchDemandRollupUncached(companyId = "main") {
+    async _getAccurateRetailBranchDemandRollupUncached(companyId = "main", lookbackDays = null) {
         const qtyByItem = new Map();
         const salesByItem = new Map();
         const branchesNeedingByItem = new Map();
-        const lookbackDays = SALES_LOOKBACK_DAYS;
+        lookbackDays = parseInt(lookbackDays, 10) || (await this.getReplenishmentSalesWindow()).days;
 
         try {
             const branchList = await this.getReplenishmentBranches(companyId);
@@ -6624,7 +6618,8 @@ export const MySqlService = {
                 SUM(CASE WHEN priority_level = 'Medium' THEN 1 ELSE 0 END) AS soonCount,
                 SUM(CASE WHEN COALESCE(suggested_qty, 0) > 0 THEN suggested_qty ELSE 0 END) AS totalSuggested,
                 MAX(sales_scope) AS salesScope,
-                MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.salesLogicVersion')) AS UNSIGNED)) AS salesLogicVersion
+                MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.salesLogicVersion')) AS UNSIGNED)) AS salesLogicVersion,
+                MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.lookbackDays')) AS UNSIGNED)) AS salesLookbackDays
              FROM replenishment_cache
              WHERE company_id = ? AND branch_id = ?${filterSql}`,
             params
@@ -6637,6 +6632,7 @@ export const MySqlService = {
             totalSuggested: Number(row?.totalSuggested) || 0,
             salesScope: row?.salesScope || null,
             salesLogicVersion: Number(row?.salesLogicVersion) || 1,
+            salesLookbackDays: Number(row?.salesLookbackDays) || 0,
         };
     },
 
@@ -6739,6 +6735,7 @@ export const MySqlService = {
                         totalSuggested: branchStats.totalSuggested,
                     },
                     salesLogicVersion: branchStats.salesLogicVersion,
+                    salesLookbackDays: branchStats.salesLookbackDays,
                 },
             };
         } catch (err) {
