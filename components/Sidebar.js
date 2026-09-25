@@ -356,6 +356,7 @@ export default function Sidebar() {
               </>
             )}
           </svg>
+          {!isCollapsed && <span>{isCollapsed ? "Expand" : "Collapse"}</span>}
         </button>
 
         <AutoSyncIndicator collapsed={isCollapsed} />
