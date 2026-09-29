@@ -3978,6 +3978,8 @@ export const MySqlService = {
     async ensureProductInventoryItemsTable() {
         const inventoryDb = process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory";
         try {
+            // Fail fast on metadata locks so schema work cannot block the whole MySQL server.
+            await pool.query("SET SESSION lock_wait_timeout = 5");
             await pool.query(`
                 CREATE TABLE IF NOT EXISTS \`${INVENTORY_SYNC_TABLE}\` (
                     \`id\` INT NOT NULL AUTO_INCREMENT,
@@ -7577,11 +7579,28 @@ export const MySqlService = {
         const timeout = new Promise((_, reject) => {
             setTimeout(() => reject(Object.assign(new Error("DB_PING_TIMEOUT"), { code: "ETIMEDOUT" })), ms);
         });
+        // Use short-lived connections so a saturated app pool cannot make /api/health
+        // report the whole server as down.
+        const pingOne = async (database) => {
+            const conn = await mysql.createConnection({
+                host: process.env.MYSQL_HOST,
+                port: parseInt(process.env.MYSQL_PORT || "3306", 10),
+                user: process.env.MYSQL_USER,
+                password: process.env.MYSQL_PASSWORD,
+                database,
+                connectTimeout: Math.min(ms, 4000),
+            });
+            try {
+                await conn.query("SELECT 1 AS ok");
+            } finally {
+                await conn.end().catch(() => {});
+            }
+        };
         try {
             await Promise.race([
                 Promise.all([
-                    purchasePool.query("SELECT 1 AS ok"),
-                    pool.query("SELECT 1 AS ok"),
+                    pingOne(process.env.MYSQL_PURCHASE_DATABASE || "db_purchase"),
+                    pingOne(process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory"),
                 ]),
                 timeout,
             ]);

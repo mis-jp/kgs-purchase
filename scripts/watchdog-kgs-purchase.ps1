@@ -125,13 +125,30 @@ function Initialize-Pm2Path {
 }
 
 function Invoke-Pm2([string[]]$Pm2Args, [int]$WaitSec = 25) {
-    $pm2Cmd = Get-Command pm2 -ErrorAction SilentlyContinue
-    if (-not $pm2Cmd) {
-        throw 'pm2 not on PATH'
+    # Prefer pm2.cmd — Process.Start cannot execute the PowerShell shim (pm2.ps1).
+    $pm2CmdPath = $null
+    foreach ($dir in @('C:\Users\Administrator\AppData\Roaming\npm', 'C:\Program Files\nodejs')) {
+        $candidate = Join-Path $dir 'pm2.cmd'
+        if (Test-Path -LiteralPath $candidate) {
+            $pm2CmdPath = $candidate
+            break
+        }
     }
+    if (-not $pm2CmdPath) {
+        $pm2Cmd = Get-Command pm2.cmd -ErrorAction SilentlyContinue
+        if ($pm2Cmd) { $pm2CmdPath = $pm2Cmd.Source }
+    }
+    if (-not $pm2CmdPath) {
+        throw 'pm2.cmd not on PATH'
+    }
+
+    $argLine = ($Pm2Args | ForEach-Object {
+        if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ }
+    }) -join ' '
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $pm2Cmd.Source
-    $psi.Arguments = ($Pm2Args -join ' ')
+    $psi.FileName = 'cmd.exe'
+    $psi.Arguments = '/d /c "{0}" {1}' -f $pm2CmdPath, $argLine
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
