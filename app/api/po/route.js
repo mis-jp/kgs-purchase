@@ -9,7 +9,7 @@ import {
 import { getSystemAcumaticaCredential } from "@/lib/acumatica-system-auth";
 import { AcumaticaService } from "@/services/acumatica";
 import { MySqlService } from "@/services/mysql";
-import { getCached } from "@/lib/server-cache";
+import { kickCached } from "@/lib/server-cache";
 import { alignAllOpenPurchaseOrderStatuses } from "@/lib/po-open-status-align";
 
 export const runtime = "nodejs";
@@ -135,22 +135,20 @@ export async function GET(request) {
 
         if (source === "mysql") {
             try {
-                // Global Open/Closed align for ALL vendors (Purchase Orders + Incoming PO
-                // both hit this route). Not Softie-specific.
-                await getCached("po:align-open-status-v3-global", 10 * 60_000, async () => {
+                // Background only — never block the PO list behind Acumatica align
+                // or heavy MySQL repairs (those were causing nginx HTTP 504s).
+                kickCached("po:align-open-status-v3-global", 10 * 60_000, async () => {
                     const cred = poCred && poCred !== "__bypass__"
                         ? poCred
                         : await getSystemAcumaticaCredential();
-                    const aligned = await alignAllOpenPurchaseOrderStatuses({
+                    return alignAllOpenPurchaseOrderStatuses({
                         cookie: cred,
                         startDate: "2024-01-01",
                         closeStale: true,
                     });
-                    return aligned;
                 });
 
-                // Repair blank vendors + header amounts + status aliases once per short window
-                await getCached("po:repair-data-v2", 15 * 60_000, async () => {
+                kickCached("po:repair-data-v2", 15 * 60_000, async () => {
                     const aliases = await MySqlService.normalizePurchaseOrderStatusAliases();
                     const vendors = await MySqlService.backfillPurchaseHistoryVendorNames();
                     const amounts = await MySqlService.repairPurchaseOrderAmounts();
@@ -159,19 +157,18 @@ export async function GET(request) {
 
                 let result = await MySqlService.getPurchaseOrders(fetchParams);
 
+                // Prefer a fast in-memory vendor name enrich over another full-table backfill.
                 const needsVendorBackfill = result.orders.some(
                     (o) => o.vendorId && !String(o.vendorName || "").trim()
                 );
                 if (needsVendorBackfill) {
-                    const updated = await MySqlService.backfillPurchaseHistoryVendorNames();
-                    if (updated > 0) {
-                        result = await MySqlService.getPurchaseOrders(fetchParams);
-                    } else {
-                        result = {
-                            ...result,
-                            orders: await enrichVendorNames(result.orders),
-                        };
-                    }
+                    result = {
+                        ...result,
+                        orders: await enrichVendorNames(result.orders),
+                    };
+                    kickCached("po:repair-vendors-once", 15 * 60_000, async () =>
+                        MySqlService.backfillPurchaseHistoryVendorNames()
+                    );
                 }
 
                 // Always return MySQL list results (including empty). Do not fall through to

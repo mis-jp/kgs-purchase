@@ -126,8 +126,17 @@ export default function ConnectionWarning() {
         const onStatusEvent = (e) => {
             const next = e?.detail?.kind;
             if (!next) return;
-            applyKind(next);
-            if (next !== CONNECTION_KIND.OK) setDismissed(false);
+            // Trust OK / internet immediately. For "server", re-check health so
+            // transient API/ERP failures do not keep the modal stuck open.
+            if (next === CONNECTION_KIND.OK || next === CONNECTION_KIND.INTERNET) {
+                applyKind(next);
+                if (next !== CONNECTION_KIND.OK) setDismissed(false);
+                return;
+            }
+            if (next === CONNECTION_KIND.SERVER) {
+                setDismissed(false);
+                void runCheck();
+            }
         };
 
         window.addEventListener("online", onOnline);
