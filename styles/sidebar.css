@@ -121,6 +121,20 @@
   flex-shrink: 0;
 }
 
+.sidebar-logo-img {
+  display: block;
+  height: 28px;
+  width: auto;
+  max-width: 7.5rem;
+  object-fit: contain;
+  background: transparent;
+}
+
+.sidebar.collapsed .sidebar-logo-img {
+  height: 26px;
+  max-width: 48px;
+}
+
 [data-theme='dark'] .sidebar-logo {
   filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.3));
 }

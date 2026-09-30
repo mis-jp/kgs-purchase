@@ -146,7 +146,7 @@ function SignInContent() {
                 <div className="signin-header">
                     <div className="signin-logo-container">
                         <img
-                            src="https://kelin-website.vercel.app/KELIN-LOGO-01.png"
+                            src={withBasePath("/kelin-logo.png")}
                             alt="Kelin Graphics System"
                             className="signin-logo-img"
                             width={180}

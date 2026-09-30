@@ -279,7 +279,11 @@ export default function Sidebar() {
 
           <div className="sidebar-brand">
             <span className="sidebar-logo">
-              <img src="https://kelin-website.vercel.app/KELIN-LOGO-01.png" alt="KGS Logo" style={{ width: '38px', marginLeft: '4px' }} />
+              <img
+                src={withBasePath("/kelin-logo-mark.png")}
+                alt="Kelin Graphics System"
+                className="sidebar-logo-img"
+              />
             </span>
             {!isCollapsed && <span>KGS PURCHASE</span>}
           </div>
