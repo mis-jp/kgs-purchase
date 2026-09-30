@@ -21,14 +21,16 @@
 
 .repl-window-field {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.45rem;
+    min-width: 0;
     color: var(--text-primary);
     font-size: 1.35rem;
     font-weight: 700;
 }
 
 .repl-window-unit {
+    flex: 0 0 auto;
     min-height: 42px;
     padding: 0.2rem 0.4rem;
     border-radius: var(--radius-md);
@@ -40,15 +42,27 @@
 }
 
 .repl-window-field input {
-    width: 4.5rem;
+    flex: 1 1 7.25rem;
+    width: 7.25rem;
+    min-width: 6.5rem;
+    max-width: 100%;
+    box-sizing: border-box;
     min-height: 42px;
-    padding: 0.2rem 0.45rem;
+    padding: 0.2rem 0.55rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border-medium);
     background: var(--bg-input);
     color: var(--text-primary);
-    font-size: 1.75rem;
+    font-size: 1.45rem;
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    text-align: left;
+}
+
+.repl-window-field input::-webkit-outer-spin-button,
+.repl-window-field input::-webkit-inner-spin-button {
+    margin-left: 0.15rem;
 }
 
 .repl-window-save {

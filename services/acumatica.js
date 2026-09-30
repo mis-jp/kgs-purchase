@@ -1216,6 +1216,112 @@ export const AcumaticaService = {
     },
 
     /** ── VENDORS ── */
+
+    _vendorAuthHeaders(credential) {
+        const isBearer = typeof credential === "string" && credential.startsWith("__bearer__");
+        return {
+            Accept: "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "X-Requested-With": "XMLHttpRequest",
+            ...(isBearer
+                ? { Authorization: `Bearer ${credential.slice(10)}` }
+                : { Cookie: credential || "" }),
+        };
+    },
+
+    _mapVendorRow(v) {
+        const vendorId = String(getF(v, "VendorID")).trim();
+        const vendorName = String(getAny(v, "VendorName", "AccountName", "LegalName")).trim();
+        if (!vendorId || !vendorName) return null;
+        return {
+            vendor_id: vendorId,
+            vendor_name: vendorName,
+            status: String(getF(v, "Status")).trim() || "Active",
+            last_sync: new Date(),
+        };
+    },
+
+    /**
+     * One-shot Vendor read. Does not use fetchWithRetry — a vendor-name
+     * search must not sit through five retries and stall the PO list.
+     */
+    async _getVendorJson(url, credential, timeoutMs = 8000) {
+        const res = await fetch(url, {
+            headers: this._vendorAuthHeaders(credential),
+            cache: "no-store",
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) {
+            const detail = await res.text().catch(() => "");
+            throw new Error(detail.slice(0, 180) || `HTTP ${res.status}`);
+        }
+        return res.json();
+    },
+
+    /**
+     * One page of the vendor directory. $select keeps this small — the full
+     * Vendor document is slow enough that per-id filters were timing out.
+     */
+    async lookupVendorDirectory(credential, { top = 500, skip = 0 } = {}) {
+        if (!credential || credential === "__bypass__") return [];
+        const url = `${ACU_BASE}/Vendor?$top=${top}&$skip=${skip}`;
+        try {
+            const data = await this._getVendorJson(url, credential, 90000);
+            const raw = data.value || [];
+            const rows = raw.map((v) => this._mapVendorRow(v)).filter(Boolean);
+            if (!rows.length && raw[0]) {
+                console.warn("[Acumatica] Vendor directory row had no name. Keys:", Object.keys(raw[0]).slice(0, 20).join(", "));
+            }
+            console.log(`[Acumatica] Vendor directory page skip=${skip}: ${rows.length} named vendor(s) of ${raw.length}.`);
+            return rows;
+        } catch (err) {
+            console.warn("[Acumatica] Vendor directory lookup skipped:", err.message);
+            return [];
+        }
+    },
+
+    /** Resolve Acumatica vendors whose name contains the search text. */
+    async lookupVendorsByName(search, credential) {
+        const s = String(search || "").trim().replace(/'/g, "''");
+        if (s.length < 2 || !credential || credential === "__bypass__") return [];
+        const url = `${ACU_BASE}/Vendor?$top=50&$filter=substringof('${s}', VendorName)`;
+        try {
+            const data = await this._getVendorJson(url, credential);
+            const vendors = data.value || [];
+            return vendors.map((v) => this._mapVendorRow(v)).filter(Boolean);
+        } catch (err) {
+            console.warn("[Acumatica] Vendor name lookup skipped:", err.message);
+            return [];
+        }
+    },
+
+    /** Resolve specific VendorIDs that exist on local POs but not in the vendor directory. */
+    async lookupVendorsByIds(vendorIds, credential) {
+        const ids = [...new Set((vendorIds || []).map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 40);
+        if (!ids.length || !credential || credential === "__bypass__") return [];
+
+        const out = [];
+        const notFound = [];
+        let cursor = 0;
+        const workers = Array.from({ length: Math.min(6, ids.length) }, async () => {
+            while (cursor < ids.length) {
+                const id = ids[cursor++];
+                const safe = id.replace(/'/g, "''");
+                const url = `${ACU_BASE}/Vendor?$top=1&$filter=VendorID eq '${safe}'`;
+                try {
+                    const data = await this._getVendorJson(url, credential);
+                    const row = this._mapVendorRow((data.value || [])[0]);
+                    if (row) out.push(row);
+                    else notFound.push(id);
+                } catch (err) {
+                    console.warn(`[Acumatica] Vendor ${id} lookup skipped:`, err.message);
+                }
+            }
+        });
+        await Promise.all(workers);
+        return { rows: out, notFound };
+    },
+
     async getVendors({ page = 1, pageSize = 50, search = "", cookie }) {
         const top = parseInt(pageSize, 10);
         const skip = (parseInt(page, 10) - 1) * top;
@@ -1334,6 +1440,150 @@ export const AcumaticaService = {
             if (skip > 50000) break;
         }
         return [...open];
+    },
+
+    /**
+     * Current Acumatica status for specific order numbers.
+     * Matches both OrderNbr and OrderType+OrderNbr (MNLP + 260480 = MNLP260480).
+     */
+    async fetchPurchaseOrderStatusesByNbrs({ cookie, orderNbrs = [] } = {}) {
+        if (!cookie || cookie === "__bypass__") return [];
+        const nbrs = [...new Set(
+            (orderNbrs || []).map((n) => String(n || "").trim()).filter(Boolean)
+        )];
+        if (!nbrs.length) return [];
+
+        const found = new Map();
+        const remember = (key, status) => {
+            const id = String(key || "").trim();
+            if (!id || !status) return;
+            found.set(id, { orderNbr: id, status });
+            found.set(id.toUpperCase(), { orderNbr: id, status });
+        };
+        const BATCH = 20;
+
+        for (let i = 0; i < nbrs.length; i += BATCH) {
+            const batch = nbrs.slice(i, i + BATCH);
+            const filter = batch
+                .map((n) => `OrderNbr eq '${n.replace(/'/g, "''")}'`)
+                .join(" or ");
+            try {
+                const url = `${ACU_BASE}/PurchaseOrder?$top=${BATCH}&$filter=${encodeURIComponent(filter)}`;
+                const res = await this.fetchWithRetry(url, cookie);
+                const data = await res.json();
+                const rows = data.value || (Array.isArray(data) ? data : []);
+                for (const row of rows) {
+                    const orderNbr = String(getF(row, "OrderNbr") || "").trim();
+                    const orderType = String(getF(row, "OrderType") || "").trim();
+                    const status = String(getF(row, "Status") || "").trim();
+                    remember(orderNbr, status);
+                    if (orderType && orderNbr) remember(`${orderType}${orderNbr}`, status);
+                }
+            } catch (err) {
+                console.warn("[Acumatica] PO status batch skipped:", err?.message || err);
+            }
+            const missed = batch.filter((n) => !found.has(n) && !found.has(n.toUpperCase()));
+            const splitFilters = missed
+                .map((n) => ({ n, filter: buildOrderFilters(n)[1] }))
+                .filter((item) => item.filter);
+            for (let j = 0; j < splitFilters.length; j += 10) {
+                const group = splitFilters.slice(j, j + 10);
+                const splitFilter = group.map((item) => `(${item.filter})`).join(" or ");
+                try {
+                    const url = `${ACU_BASE}/PurchaseOrder?$top=${group.length}&$filter=${encodeURIComponent(splitFilter)}`;
+                    const res = await this.fetchWithRetry(url, cookie);
+                    const data = await res.json();
+                    const rows = data.value || (Array.isArray(data) ? data : []);
+                    for (const row of rows) {
+                        const orderNbr = String(getF(row, "OrderNbr") || "").trim();
+                        const orderType = String(getF(row, "OrderType") || "").trim();
+                        const status = String(getF(row, "Status") || "").trim();
+                        const combined = orderType && orderNbr ? `${orderType}${orderNbr}` : "";
+                        for (const item of group) {
+                            const local = item.n.toUpperCase();
+                            if (local === orderNbr.toUpperCase() || (combined && local === combined.toUpperCase())) {
+                                remember(item.n, status);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn("[Acumatica] PO status lookup skipped:", err?.message || err);
+                }
+            }
+        }
+        const localKeys = new Set(nbrs.map((n) => n.toUpperCase()));
+        const byLocal = new Map();
+        for (const [key, value] of found) {
+            if (!localKeys.has(String(key).toUpperCase())) continue;
+            const local = nbrs.find((n) => n.toUpperCase() === String(key).toUpperCase());
+            if (local) byLocal.set(local, { orderNbr: local, status: value.status });
+        }
+        return [...byLocal.values()];
+    },
+
+    /**
+     * Purchase orders in a terminal Acumatica status (Closed, Completed, …).
+     * Order date is not the close date, so the window must stay wide enough to
+     * include older orders that were finished later.
+     */
+    async fetchPurchaseOrdersByStatuses({ cookie, statuses = [], startDate = "2024-01-01", onPage = null } = {}) {
+        if (!cookie || cookie === "__bypass__") return [];
+        const wanted = [...new Set(
+            (statuses || []).map((s) => String(s || "").trim()).filter(Boolean)
+        )];
+        if (!wanted.length) return [];
+
+        const found = new Map();
+        const start = String(startDate || "2024-01-01").slice(0, 10);
+        const remember = (orderNbr, orderType, rowStatus) => {
+            const nbr = String(orderNbr || "").trim();
+            const type = String(orderType || "").trim();
+            const statusValue = String(rowStatus || "").trim();
+            if (!nbr || !statusValue) return [];
+            const keys = [nbr];
+            if (type && !nbr.toUpperCase().startsWith(type.toUpperCase())) {
+                keys.push(`${type}${nbr}`);
+            }
+            const page = [];
+            for (const key of keys) {
+                const entry = { orderNbr: key, status: statusValue };
+                found.set(key.toUpperCase(), entry);
+                page.push(entry);
+            }
+            return page;
+        };
+
+        for (const status of wanted) {
+            const top = 100;
+            let skip = 0;
+            let count = 0;
+            const safeStatus = status.replace(/'/g, "''");
+            const filter = start
+                ? `Status eq '${safeStatus}' and Date ge datetimeoffset'${start}T00:00:00Z'`
+                : `Status eq '${safeStatus}'`;
+            try {
+                while (true) {
+                    const url = `${ACU_BASE}/PurchaseOrder?$top=${top}&$skip=${skip}&$filter=${encodeURIComponent(filter)}`;
+                    const res = await this.fetchWithRetry(url, cookie);
+                    const data = await res.json();
+                    const rows = data.value || (Array.isArray(data) ? data : []);
+                    if (!rows.length) break;
+                    const page = [];
+                    for (const row of rows) {
+                        page.push(...remember(getF(row, "OrderNbr"), getF(row, "OrderType"), getF(row, "Status") || status));
+                    }
+                    count += rows.length;
+                    if (onPage && page.length) await onPage(page);
+                    if (rows.length < top) break;
+                    skip += rows.length;
+                    if (skip > 50000) break;
+                }
+                console.log(`[Acumatica] PO status "${status}": ${count} order(s).`);
+            } catch (err) {
+                console.warn(`[Acumatica] PO status "${status}" fetch skipped:`, err?.message || err);
+            }
+        }
+        return [...found.values()];
     },
 
     /** Fetch line items for specific order numbers (used when MySQL lines are missing) */

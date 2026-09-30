@@ -11,6 +11,7 @@ import {
     hasSystemAcumaticaCredentials,
 } from "@/lib/sync-acumatica-auth";
 import { alignAllOpenPurchaseOrderStatuses } from "@/lib/po-open-status-align";
+import { ensurePurchaseVendorNames } from "@/lib/po-vendor-names";
 import mysql from "mysql2/promise";
 import { isPoLineCompleted } from "@/lib/open-po-match.js";
 
@@ -1070,7 +1071,7 @@ export async function POST(request) {
                                 historyRows.push({
                                     order_nbr: orderNbr,
                                     vendor_id: getF(o, "VendorID"),
-                                    vendor_name: getF(o, "VendorName"),
+                                    vendor_name: getAny(o, "VendorName", "VendorID_description", "VendorDescription"),
                                     status,
                                     order_date: getF(o, "Date"),
                                     promised_date: getF(o, "PromisedOn"),
@@ -1118,6 +1119,15 @@ export async function POST(request) {
                             }
                         } catch (alignErr) {
                             console.warn(">>> [Sync API] PO Open status align skipped:", alignErr.message);
+                        }
+                        try {
+                            const named = await ensurePurchaseVendorNames({ cookie: effectiveCookie });
+                            if (named.upserted > 0) {
+                                await MySqlService.backfillPurchaseHistoryVendorNames();
+                                console.log(`>>> [Sync API] Filled ${named.upserted} vendor name(s) from Acumatica.`);
+                            }
+                        } catch (vendorNameErr) {
+                            console.warn(">>> [Sync API] Vendor name fill skipped:", vendorNameErr.message);
                         }
                         await MySqlService.logSyncEvent(options.mode, "Incoming PO", "completed", poTotal);
                         send({ section: "Incoming PO", status: "done", details: "Purchase order sync complete.", progress: 100 });

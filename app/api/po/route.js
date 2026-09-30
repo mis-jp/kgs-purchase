@@ -11,6 +11,7 @@ import { AcumaticaService } from "@/services/acumatica";
 import { MySqlService } from "@/services/mysql";
 import { kickCached } from "@/lib/server-cache";
 import { alignAllOpenPurchaseOrderStatuses } from "@/lib/po-open-status-align";
+import { ensurePurchaseVendorNames, withVendorNameTimeout } from "@/lib/po-vendor-names";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -137,7 +138,7 @@ export async function GET(request) {
             try {
                 // Background only — never block the PO list behind Acumatica align
                 // or heavy MySQL repairs (those were causing nginx HTTP 504s).
-                kickCached("po:align-open-status-v3-global", 10 * 60_000, async () => {
+                kickCached("po:align-open-status-v4-terminal", 10 * 60_000, async () => {
                     const cred = poCred && poCred !== "__bypass__"
                         ? poCred
                         : await getSystemAcumaticaCredential();
@@ -154,6 +155,23 @@ export async function GET(request) {
                     const amounts = await MySqlService.repairPurchaseOrderAmounts();
                     return { aliases, vendors, amounts };
                 });
+
+                // Names live on the Acumatica Vendor record. PO sync stores the id only,
+                // so a name search misses vendors added after the last directory sync.
+                const vendorCred = poCred && poCred !== "__bypass__" ? poCred : null;
+                if (vendorCred && search) {
+                    // One Acumatica name lookup, then the SQL join can see the vendor.
+                    // Filling every missing id stays in the background so the list is not stuck.
+                    await withVendorNameTimeout(
+                        ensurePurchaseVendorNames({ search, cookie: vendorCred, fillMissing: false }),
+                        12000
+                    );
+                }
+                if (vendorCred) {
+                    kickCached("po:fill-vendor-names-v4", 10 * 60_000, () =>
+                        ensurePurchaseVendorNames({ cookie: vendorCred })
+                    );
+                }
 
                 let result = await MySqlService.getPurchaseOrders(fetchParams);
 

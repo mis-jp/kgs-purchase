@@ -24,6 +24,7 @@ import { TARGET_DAYS_OF_COVER } from "@/lib/replenishment-insights.js";
 import { getCached, invalidateCache } from "@/lib/server-cache";
 import { FORECAST_ALL_BRANCH, forecastBranchKey, forecastSoldQty, listMonthsInRange, monthInvoiceCoverageComplete, normalizeInvKey } from "@/lib/forecast-generator.js";
 import {
+    normalizeErpPoStatus,
     openPoHeaderStatuses,
     sqlMatchOpenPoForBranch,
     sqlPoLineOpenQty,
@@ -83,6 +84,60 @@ function instrumentPool(p, label) {
 
 instrumentPool(pool, "inventory");
 instrumentPool(purchasePool, "purchase");
+
+function rejectAfter(ms) {
+    let timer;
+    const promise = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            reject(Object.assign(new Error("DB_PING_TIMEOUT"), { code: "ETIMEDOUT" }));
+        }, ms);
+    });
+    return { promise, cancel: () => clearTimeout(timer) };
+}
+
+/** Ping with a fresh connection so a busy app pool cannot mark the server down. */
+async function pingDatabase(database, timeoutMs) {
+    let conn = null;
+    let abandoned = false;
+    const wait = rejectAfter(timeoutMs);
+    const opening = mysql.createConnection({
+        host: process.env.MYSQL_HOST,
+        port: parseInt(process.env.MYSQL_PORT || "3306", 10),
+        user: process.env.MYSQL_USER,
+        password: process.env.MYSQL_PASSWORD,
+        database,
+        connectTimeout: timeoutMs,
+    }).then((c) => {
+        if (abandoned) {
+            c.end().catch(() => {});
+            throw Object.assign(new Error("DB_PING_TIMEOUT"), { code: "ETIMEDOUT" });
+        }
+        conn = c;
+        return c;
+    });
+    try {
+        const c = await Promise.race([opening, wait.promise]);
+        wait.cancel();
+        const queryWait = rejectAfter(timeoutMs);
+        try {
+            await Promise.race([
+                c.query({ sql: "SELECT 1 AS ok", timeout: timeoutMs }),
+                queryWait.promise,
+            ]);
+        } finally {
+            queryWait.cancel();
+        }
+        return { ok: true };
+    } catch (err) {
+        abandoned = true;
+        return { ok: false, error: err?.code || err?.message || "database unreachable" };
+    } finally {
+        wait.cancel();
+        if (conn) await conn.end().catch(() => {});
+    }
+}
+
+let pingInflight = null;
 
 /**
  * product_inventory_items — CMS / Connect catalog (ONE row per SKU; DB trigger blocks twins).
@@ -186,9 +241,22 @@ async function resolveInventoryLayout(companyId = "main") {
     return "catalog-empty";
 }
 
-function salesLookbackSql(days = SALES_LOOKBACK_DAYS) {
-    const window = parseInt(days, 10) || SALES_LOOKBACK_DAYS;
+function salesLookbackSql(days = SALES_LOOKBACK_DAYS, unit = "days") {
+    if (unit === "months") {
+        const months = Math.max(1, parseInt(days, 10) || 1);
+        return `document_date >= DATE_SUB(CURDATE(), INTERVAL ${months} MONTH) AND document_date <= CURDATE()`;
+    }
+    const window = Math.max(1, parseInt(days, 10) || SALES_LOOKBACK_DAYS);
     return `document_date >= DATE_SUB(CURDATE(), INTERVAL ${window} DAY) AND document_date <= CURDATE()`;
+}
+
+/** SQL date filter for the admin sales window. Months are calendar months. */
+function salesWindowClause(salesWindow) {
+    if (salesWindow?.unit === "months") {
+        return salesLookbackSql(salesWindow.value, "months");
+    }
+    const days = Number(salesWindow?.days) || Number(salesWindow?.value) || SALES_LOOKBACK_DAYS;
+    return salesLookbackSql(days, "days");
 }
 
 /** Join catalog metadata when reading per-branch warehouse stock rows. */
@@ -665,12 +733,24 @@ export const MySqlService = {
                 total_amount = IF(VALUES(total_amount) > 0, VALUES(total_amount), COALESCE(NULLIF(total_amount, 0), VALUES(total_amount))),
                 last_sync = VALUES(last_sync)
             `;
+            const dateOrNull = (value) => {
+                if (value == null) return null;
+                const s = String(value).trim();
+                if (!s || s.startsWith("0000-00-00")) return null;
+                return s;
+            };
             const values = rows.map(r => {
-                let status = String(r.status || "").trim();
-                if (/^hold$/i.test(status)) status = "On Hold";
-                if (/^canceled$/i.test(status)) status = "Cancelled";
+                const status = normalizeErpPoStatus(r.status);
                 return [
-                    r.order_nbr, r.vendor_id, r.vendor_name, status, r.order_date, r.promised_date, r.receipt_date, r.total_amount, new Date()
+                    r.order_nbr,
+                    r.vendor_id,
+                    r.vendor_name,
+                    status,
+                    dateOrNull(r.order_date),
+                    dateOrNull(r.promised_date),
+                    dateOrNull(r.receipt_date),
+                    r.total_amount,
+                    new Date()
                 ];
             });
             await connection.query(sql, [values]);
@@ -762,6 +842,65 @@ export const MySqlService = {
             invalidateCache("openPo:");
         }
         return { opened, closed };
+    },
+
+    /**
+     * Write Acumatica's exact status (Closed, Completed, …) onto local headers.
+     * Does not require a receipt date — a finished PO often has none stored here.
+     */
+    async applyAcumaticaPoStatusMap(entries = []) {
+        const byStatus = new Map();
+        for (const row of entries) {
+            const orderNbr = String(row?.orderNbr || "").trim();
+            const status = normalizeErpPoStatus(row?.status);
+            if (!orderNbr || !status) continue;
+            if (!byStatus.has(status)) byStatus.set(status, []);
+            byStatus.get(status).push(orderNbr);
+        }
+
+        let updated = 0;
+        const CHUNK = 200;
+        for (const [status, ids] of byStatus) {
+            const unique = [...new Set(ids)];
+            for (let i = 0; i < unique.length; i += CHUNK) {
+                const chunk = unique.slice(i, i + CHUNK);
+                const ph = chunk.map(() => "?").join(",");
+                const [res] = await purchasePool.query(
+                    `UPDATE purchase_history
+                     SET status = ?
+                     WHERE order_nbr IN (${ph})
+                       AND status <> ?`,
+                    [status, ...chunk, status]
+                );
+                updated += Number(res?.affectedRows) || 0;
+            }
+        }
+
+        if (updated > 0) {
+            invalidateCache("po:");
+            invalidateCache("openPo:");
+        }
+        return { updated };
+    },
+
+    /** Local headers still marked Open, so their Acumatica status can be rechecked. */
+    async listPurchaseOrderNbrsByStatus(status = "Open", sinceDate = "2024-01-01") {
+        const since = String(sinceDate || "").slice(0, 10);
+        const params = [status];
+        let sinceClause = "";
+        if (since) {
+            sinceClause = " AND order_date IS NOT NULL AND DATE(order_date) >= ?";
+            params.push(since);
+        }
+        const [rows] = await purchasePool.query(
+            `SELECT TRIM(order_nbr) AS orderNbr
+             FROM purchase_history
+             WHERE status = ?${sinceClause}`,
+            params
+        );
+        return [...new Set(
+            (rows || []).map((row) => String(row.orderNbr || "").trim()).filter(Boolean)
+        )];
     },
 
     async ensureReceivedQtyColumn() {
@@ -951,6 +1090,54 @@ export const MySqlService = {
         }
     },
 
+    /**
+     * Vendor IDs that appear on purchase orders but have no usable name
+     * in the local vendor directory (new Acumatica vendors after the last directory sync).
+     */
+    async listPurchaseVendorIdsMissingFromDirectory(limit = 40) {
+        const cap = Math.min(80, Math.max(1, parseInt(limit, 10) || 40));
+        try {
+            const [rows] = await purchasePool.query(
+                `SELECT h.vendor_id
+                 FROM purchase_history h
+                 LEFT JOIN vendors v
+                   ON v.vendor_id COLLATE utf8mb4_unicode_ci = h.vendor_id
+                 WHERE h.vendor_id IS NOT NULL
+                   AND TRIM(h.vendor_id) != ''
+                   AND (
+                     v.vendor_id IS NULL
+                     OR TRIM(COALESCE(v.vendor_name, '')) = ''
+                   )
+                 GROUP BY h.vendor_id
+                 ORDER BY COUNT(*) DESC
+                 LIMIT ${cap}`
+            );
+            return rows.map((r) => String(r.vendor_id || "").trim()).filter(Boolean);
+        } catch (err) {
+            console.error("[MySQL listPurchaseVendorIdsMissingFromDirectory Error]", err);
+            return [];
+        }
+    },
+
+    /** Local vendor directory matches for a name or id fragment. */
+    async findVendorIdsByName(search) {
+        const q = String(search || "").trim();
+        if (q.length < 2) return [];
+        try {
+            const [rows] = await purchasePool.query(
+                `SELECT vendor_id
+                 FROM vendors
+                 WHERE vendor_name LIKE ? OR vendor_id LIKE ?
+                 LIMIT 20`,
+                [`%${q}%`, `%${q}%`]
+            );
+            return rows.map((r) => String(r.vendor_id || "").trim()).filter(Boolean);
+        } catch (err) {
+            console.error("[MySQL findVendorIdsByName Error]", err);
+            return [];
+        }
+    },
+
     async getVendorNamesByIds(vendorIds = []) {
         const ids = [...new Set((vendorIds || []).map((id) => String(id || "").trim()).filter(Boolean))];
         if (!ids.length) return {};
@@ -1026,6 +1213,10 @@ export const MySqlService = {
                 `UPDATE purchase_history SET status = 'Cancelled' WHERE status = 'Canceled'`
             );
             n += Number(canceled?.affectedRows) || 0;
+            const [completed] = await purchasePool.query(
+                `UPDATE purchase_history SET status = 'Closed' WHERE status IN ('Completed', 'Complete')`
+            );
+            n += Number(completed?.affectedRows) || 0;
             if (n > 0) {
                 invalidateCache("po:");
                 invalidateCache("openPo:");
@@ -5217,22 +5408,25 @@ export const MySqlService = {
      * Returns Map<inventory_id_upper, { qty_sold, total_sales }>
      * Required by Dashboard Inventory API.
      */
-    async getPeriodicSalesSummary({ branch = "", search = "", lookbackDays = SALES_LOOKBACK_DAYS } = {}) {
+    async getPeriodicSalesSummary({ branch = "", search = "", lookbackDays = SALES_LOOKBACK_DAYS, salesWindow = null } = {}) {
         if (branch && branch !== "All Branches" && isExcludedBranchAlias(branch)) {
             return new Map();
         }
+        const windowKey = salesWindow
+            ? `${salesWindow.unit}:${salesWindow.unit === "months" ? salesWindow.value : salesWindow.days}`
+            : `days:${lookbackDays}`;
         if (!search) {
-            const key = `salesSummary:${lookbackDays}:${String(branch || "ALL").toUpperCase()}`;
+            const key = `salesSummary:${windowKey}:${String(branch || "ALL").toUpperCase()}`;
             return getCached(key, 60_000, () =>
-                this._getPeriodicSalesSummaryUncached({ branch, search: "", lookbackDays })
+                this._getPeriodicSalesSummaryUncached({ branch, search: "", lookbackDays, salesWindow })
             );
         }
-        return this._getPeriodicSalesSummaryUncached({ branch, search, lookbackDays });
+        return this._getPeriodicSalesSummaryUncached({ branch, search, lookbackDays, salesWindow });
     },
 
-    async _getPeriodicSalesSummaryUncached({ branch = "", search = "", lookbackDays = SALES_LOOKBACK_DAYS } = {}) {
+    async _getPeriodicSalesSummaryUncached({ branch = "", search = "", lookbackDays = SALES_LOOKBACK_DAYS, salesWindow = null } = {}) {
         try {
-            const whereClauses = [salesLookbackSql(lookbackDays)];
+            const whereClauses = [salesWindow ? salesWindowClause(salesWindow) : salesLookbackSql(lookbackDays)];
             const params = [];
 
             const salesEx = sqlExcludeSalesBranches("branch_name");
@@ -5424,13 +5618,13 @@ export const MySqlService = {
         }
     },
 
-    async getReplenishmentSalesSummary({ branch = "", lookbackDays = SALES_LOOKBACK_DAYS } = {}) {
+    async getReplenishmentSalesSummary({ branch = "", lookbackDays = SALES_LOOKBACK_DAYS, salesWindow = null } = {}) {
         if (branch && branch !== "All Branches" && isExcludedBranchAlias(branch)) {
             return { map: new Map(), mode: "net" };
         }
 
         try {
-            const netRaw = await this.getPeriodicSalesSummary({ branch, lookbackDays });
+            const netRaw = await this.getPeriodicSalesSummary({ branch, lookbackDays, salesWindow });
             const netMap = new Map();
             for (const [key, val] of netRaw) {
                 const qty = netQtySold(val?.qty_sold);
@@ -5451,7 +5645,7 @@ export const MySqlService = {
                 return { map: netMap, mode: "net" };
             }
 
-            const grossMap = await this._queryBranchGrossSalesSummary(branch, lookbackDays);
+            const grossMap = await this._queryBranchGrossSalesSummary(branch, lookbackDays, salesWindow);
             const map = new Map();
             for (const [key, val] of grossMap) {
                 const qty = netQtySold(val?.qty_sold);
@@ -5470,8 +5664,8 @@ export const MySqlService = {
         }
     },
 
-    async _queryBranchGrossSalesSummary(branch = "", lookbackDays = SALES_LOOKBACK_DAYS) {
-        const whereClauses = [salesLookbackSql(lookbackDays)];
+    async _queryBranchGrossSalesSummary(branch = "", lookbackDays = SALES_LOOKBACK_DAYS, salesWindow = null) {
+        const whereClauses = [salesWindow ? salesWindowClause(salesWindow) : salesLookbackSql(lookbackDays)];
         const params = [];
         const salesEx = sqlExcludeSalesBranches("branch_name");
         whereClauses.push(salesEx.clause);
@@ -5530,10 +5724,19 @@ export const MySqlService = {
                  WHERE setting_key IN ('replenishment_sales_value', 'replenishment_sales_unit', 'replenishment_sales_months')`
             );
             const saved = Object.fromEntries(rows.map((row) => [row.setting_key, row.setting_value]));
-            return normalizeReplenishmentWindow({
+            const window = normalizeReplenishmentWindow({
                 value: saved.replenishment_sales_value ?? saved.replenishment_sales_months,
                 unit: saved.replenishment_sales_unit || (saved.replenishment_sales_months ? "months" : "months"),
             });
+            if (window.unit === "months") {
+                const [spanRows] = await purchasePool.query(
+                    `SELECT DATEDIFF(CURDATE(), DATE_SUB(CURDATE(), INTERVAL ? MONTH)) AS days`,
+                    [window.value]
+                );
+                const span = Number(spanRows?.[0]?.days);
+                if (span > 0) window.days = span;
+            }
+            return window;
         } catch (err) {
             console.warn("[MySQL getReplenishmentSalesWindow]", err.message);
             return normalizeReplenishmentWindow({ value: 3, unit: "months" });
@@ -5558,39 +5761,48 @@ export const MySqlService = {
                 [key, settingValue]
             );
         }
-        return window;
+        if (window.unit !== "months") {
+            await purchasePool.query(
+                `DELETE FROM app_settings WHERE setting_key = 'replenishment_sales_months'`
+            );
+        }
+        return this.getReplenishmentSalesWindow();
     },
 
     /** Sales for replenishment using the admin sales window. The window is not stretched past that number. */
-    async getAccurateReplenishmentSalesMap({ branch = "", companyId = "main", lookbackDays = null } = {}) {
+    async getAccurateReplenishmentSalesMap({ branch = "", companyId = "main", salesWindow = null } = {}) {
         const branchKey = String(branch || "MAIN").trim().toUpperCase() || "MAIN";
         const companyKey = String(companyId || "main");
-        const days = Number(lookbackDays) || (await this.getReplenishmentSalesWindow()).days;
+        const window = salesWindow?.days ? salesWindow : await this.getReplenishmentSalesWindow();
+        const days = Number(window.days) || SALES_LOOKBACK_DAYS;
         let watermark = "0";
         try {
             const wm = await this.getReplenishmentDataWatermark();
             watermark = wm ? new Date(wm).toISOString() : "0";
         } catch { /* ignore */ }
 
-        const cacheKey = `replSalesMap:v7:${companyKey}:${branchKey}:${days}:${watermark}`;
+        const cacheKey = `replSalesMap:v8:${companyKey}:${branchKey}:${window.unit}:${window.value}:${days}:${watermark}`;
         return getCached(cacheKey, 300_000, () =>
-            this._getAccurateReplenishmentSalesMapUncached({ branch, companyId, lookbackDays: days })
+            this._getAccurateReplenishmentSalesMapUncached({ branch, companyId, salesWindow: window })
         );
     },
 
-    async _getAccurateReplenishmentSalesMapUncached({ branch = "", companyId = "main", lookbackDays = SALES_LOOKBACK_DAYS } = {}) {
+    async _getAccurateReplenishmentSalesMapUncached({ branch = "", companyId = "main", salesWindow = null } = {}) {
         const isMain = !branch || String(branch).trim().toUpperCase() === "MAIN";
         const branchKey = String(branch || "").trim().toUpperCase();
-        lookbackDays = parseInt(lookbackDays, 10) || SALES_LOOKBACK_DAYS;
+        const window = salesWindow?.days ? salesWindow : await this.getReplenishmentSalesWindow();
+        const lookbackDays = Number(window.days) || SALES_LOOKBACK_DAYS;
 
         if (isMain) {
-            const result = await this.getRetailNetworkSalesSummary({ companyId, lookbackDays });
+            const result = await this.getRetailNetworkSalesSummary({ companyId, lookbackDays, salesWindow: window });
             const map = result.map;
 
             return {
                 map,
                 salesScope: "network",
                 lookbackDays,
+                salesWindowUnit: window.unit,
+                salesWindowValue: window.value,
                 salesMode: result.mode || "net",
             };
         }
@@ -5600,7 +5812,7 @@ export const MySqlService = {
         // against warehouse-only on-hand. Plan Manila metro demand from MANILA branch
         // (which aggregates related warehouse stock).
         if (isWarehouseLikeAlias(branchKey) && !isRetailReplenishmentBranch(branchKey)) {
-            const strict = await this.getReplenishmentSalesSummary({ branch: branchKey, lookbackDays });
+            const strict = await this.getReplenishmentSalesSummary({ branch: branchKey, lookbackDays, salesWindow: window });
             const salesMode = strict.mode;
 
             const map = new Map();
@@ -5611,12 +5823,12 @@ export const MySqlService = {
                     salesScope: "warehouse",
                 });
             }
-            return { map, salesScope: "warehouse", lookbackDays, salesMode };
+            return { map, salesScope: "warehouse", lookbackDays, salesWindowUnit: window.unit, salesWindowValue: window.value, salesMode };
         }
 
         // Retail branches: Acumatica branch invoices only — never catalog-network
         // (company-wide) fallback. That invents Sells/day for SKUs with 0 local stock.
-        let strict = await this.getReplenishmentSalesSummary({ branch, lookbackDays });
+        let strict = await this.getReplenishmentSalesSummary({ branch, lookbackDays, salesWindow: window });
         let map = new Map();
         for (const [key, val] of strict.map) {
             map.set(key, {
@@ -5628,7 +5840,7 @@ export const MySqlService = {
         const salesMode = strict.mode;
         let salesScope = "branch";
 
-        return { map, salesScope, lookbackDays, salesMode };
+        return { map, salesScope, lookbackDays, salesWindowUnit: window.unit, salesWindowValue: window.value, salesMode };
     },
 
     /** Inventory IDs with any sales document at this branch in the lookback window. */
@@ -5661,9 +5873,9 @@ export const MySqlService = {
     },
 
     /** Network-wide sales for retail invoice branches (MAIN warehouse demand). Net first, gross fallback. */
-    async getRetailNetworkSalesSummary({ companyId = "main", lookbackDays = SALES_LOOKBACK_DAYS } = {}) {
+    async getRetailNetworkSalesSummary({ companyId = "main", lookbackDays = SALES_LOOKBACK_DAYS, salesWindow = null } = {}) {
         try {
-            const whereClauses = [salesLookbackSql(lookbackDays)];
+            const whereClauses = [salesWindow ? salesWindowClause(salesWindow) : salesLookbackSql(lookbackDays)];
             const params = [];
 
             const salesEx = sqlExcludeSalesBranches("branch_name");
@@ -5833,26 +6045,11 @@ export const MySqlService = {
             watermark = wm ? new Date(wm).toISOString() : "0";
         } catch { /* ignore */ }
 
-        const { days } = await this.getReplenishmentSalesWindow();
-        const cacheKey = `accurateRetailDemand:v6:${companyId}:${days}:${watermark}`;
-        return getCached(cacheKey, 120_000, async () => {
-            const [live, cached, suggestedTotals] = await Promise.all([
-                this._getAccurateRetailBranchDemandRollupUncached(companyId, days),
-                this.getRetailBranchDemandRollupFromCache(companyId),
-                this.getBranchSuggestedQtyTotals(companyId),
-            ]);
-            return this._mergeRetailDemandRollups([
-                live,
-                cached,
-                {
-                    qtyByItem: suggestedTotals,
-                    salesByItem: new Map(),
-                    branchesNeedingByItem: new Map(),
-                    lookbackDays: live?.lookbackDays || SALES_LOOKBACK_DAYS,
-                    source: "branch-suggested-sum",
-                },
-            ]);
-        });
+        const salesWindow = await this.getReplenishmentSalesWindow();
+        const cacheKey = `accurateRetailDemand:v7:${companyId}:${salesWindow.unit}:${salesWindow.value}:${salesWindow.days}:${watermark}`;
+        return getCached(cacheKey, 120_000, () =>
+            this._getAccurateRetailBranchDemandRollupUncached(companyId, salesWindow)
+        );
     },
 
     /** Sum branch suggested_qty per SKU (retail branches only) — floor when live rollup misses rows. */
@@ -5933,11 +6130,14 @@ export const MySqlService = {
         };
     },
 
-    async _getAccurateRetailBranchDemandRollupUncached(companyId = "main", lookbackDays = null) {
+    async _getAccurateRetailBranchDemandRollupUncached(companyId = "main", salesWindow = null) {
         const qtyByItem = new Map();
         const salesByItem = new Map();
         const branchesNeedingByItem = new Map();
-        lookbackDays = parseInt(lookbackDays, 10) || (await this.getReplenishmentSalesWindow()).days;
+        const window = salesWindow && typeof salesWindow === "object" && salesWindow.days
+            ? salesWindow
+            : await this.getReplenishmentSalesWindow();
+        const lookbackDays = Number(window.days) || SALES_LOOKBACK_DAYS;
 
         try {
             const branchList = await this.getReplenishmentBranches(companyId);
@@ -5977,7 +6177,7 @@ export const MySqlService = {
             )];
 
             const salesEx = sqlExcludeSalesBranches("branch_name");
-            const salesWhere = [salesLookbackSql(lookbackDays), salesEx.clause];
+            const salesWhere = [salesWindowClause(window), salesEx.clause];
             const salesParams = [...salesEx.params];
             if (String(companyId).toLowerCase() !== "ecommerce") {
                 const ecomSalesEx = sqlExcludeEcomSalesBranches("branch_name");
@@ -6018,33 +6218,6 @@ export const MySqlService = {
 
             const stockBySite = await this._retailBranchLiveStockBySite(companyId, retailBranches);
 
-            const cacheSuggestedBySite = new Map();
-            try {
-                const [cacheSuggestedRows] = await purchasePool.query(
-                    `SELECT UPPER(TRIM(branch_id)) AS branchId,
-                            UPPER(REPLACE(TRIM(inventory_id), ' ', '')) AS inventoryId,
-                            COALESCE(suggested_qty, 0) AS suggestedQty
-                     FROM replenishment_cache
-                     WHERE company_id = ?
-                       AND UPPER(TRIM(branch_id)) != 'MAIN'
-                       AND COALESCE(suggested_qty, 0) > 0`,
-                    [companyId]
-                );
-                for (const r of cacheSuggestedRows) {
-                    const siteKey = String(r.branchId || "").trim().toUpperCase();
-                    const inv = normalizeInvKey(r.inventoryId) || String(r.inventoryId || "").trim();
-                    if (!siteKey || !inv || !isRetailReplenishmentBranch(siteKey)) continue;
-                    if (!cacheSuggestedBySite.has(siteKey)) {
-                        cacheSuggestedBySite.set(siteKey, new Map());
-                    }
-                    const m = cacheSuggestedBySite.get(siteKey);
-                    const n = Number(r.suggestedQty) || 0;
-                    if (n > (m.get(inv) || 0)) m.set(inv, n);
-                }
-            } catch (err) {
-                console.warn("[MySQL accurateRetailDemand] cache suggested floor skipped:", err?.message);
-            }
-
             for (const site of retailBranches) {
                 const siteKey = String(site).trim().toUpperCase();
                 const salesMap = salesBySite.get(siteKey) || new Map();
@@ -6052,7 +6225,6 @@ export const MySqlService = {
                 const keys = new Set([
                     ...salesMap.keys(),
                     ...stockMap.keys(),
-                    ...(cacheSuggestedBySite.get(siteKey)?.keys() || []),
                 ]);
 
                 for (const inventoryId of keys) {
@@ -6060,11 +6232,9 @@ export const MySqlService = {
                     const qtySold = netQtySold(sales?.qty_sold);
                     const ads = qtySold > 0 ? qtySold / lookbackDays : 0;
                     const stock = Number(stockMap.get(inventoryId)) || 0;
-                    // a + b = c; need = max(0, d − c). Coming PO not in this rollup path
-                    // (stock-only sites); live overlay applies Coming PO per branch.
+                    // Order need follows the admin window only: sells/day − on-hand.
                     const suggested = ads > 0 ? Math.max(0, ads - stock) : 0;
-                    const cachedSuggested = Number(cacheSuggestedBySite.get(siteKey)?.get(inventoryId)) || 0;
-                    const branchNeed = Math.max(suggested, cachedSuggested > 0 ? cachedSuggested : 0);
+                    const branchNeed = suggested;
 
                     if (qtySold > 0 || ads > 0) {
                         const prev = salesByItem.get(inventoryId) || {
@@ -6261,7 +6431,8 @@ export const MySqlService = {
             watermark = wm ? new Date(wm).toISOString() : "0";
         } catch { /* ignore */ }
 
-        const cacheKey = `liveBranchDemand:v6:${companyId}:${watermark}`;
+        const salesWindow = await this.getReplenishmentSalesWindow();
+        const cacheKey = `liveBranchDemand:v7:${companyId}:${salesWindow.unit}:${salesWindow.value}:${salesWindow.days}:${watermark}`;
         return getCached(cacheKey, 60_000, () =>
             this._getLiveBranchDemandByItemUncached(companyId)
         );
@@ -6426,7 +6597,7 @@ export const MySqlService = {
                 const ads = Number(r.ads) || 0;
                 const qtySold = Number(r.qtySold) || 0;
                 // Prefer summed qty; if only velocity was stored, reconstruct period qty at 90 days
-                const qty = qtySold > 0 ? qtySold : ads * SALES_LOOKBACK_DAYS;
+                const qty = qtySold > 0 ? qtySold : 0;
                 if (qty > 0) {
                     map.set(key, {
                         qty_sold: qty,
@@ -6621,7 +6792,9 @@ export const MySqlService = {
                 SUM(CASE WHEN COALESCE(suggested_qty, 0) > 0 THEN suggested_qty ELSE 0 END) AS totalSuggested,
                 MAX(sales_scope) AS salesScope,
                 MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.salesLogicVersion')) AS UNSIGNED)) AS salesLogicVersion,
-                MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.lookbackDays')) AS UNSIGNED)) AS salesLookbackDays
+                MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.lookbackDays')) AS UNSIGNED)) AS salesLookbackDays,
+                MAX(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.salesWindowUnit'))) AS salesWindowUnit,
+                MAX(CAST(JSON_UNQUOTE(JSON_EXTRACT(ai_insights_json, '$.salesWindowValue')) AS UNSIGNED)) AS salesWindowValue
              FROM replenishment_cache
              WHERE company_id = ? AND branch_id = ?${filterSql}`,
             params
@@ -6635,6 +6808,8 @@ export const MySqlService = {
             salesScope: row?.salesScope || null,
             salesLogicVersion: Number(row?.salesLogicVersion) || 1,
             salesLookbackDays: Number(row?.salesLookbackDays) || 0,
+            salesWindowUnit: row?.salesWindowUnit === "days" ? "days" : (row?.salesWindowUnit === "months" ? "months" : null),
+            salesWindowValue: Number(row?.salesWindowValue) || 0,
         };
     },
 
@@ -6738,6 +6913,8 @@ export const MySqlService = {
                     },
                     salesLogicVersion: branchStats.salesLogicVersion,
                     salesLookbackDays: branchStats.salesLookbackDays,
+                    salesWindowUnit: branchStats.salesWindowUnit,
+                    salesWindowValue: branchStats.salesWindowValue,
                 },
             };
         } catch (err) {
@@ -7571,46 +7748,33 @@ export const MySqlService = {
     },
 
     /**
-     * Lightweight DB reachability check for /api/health (short timeout).
+     * Lightweight DB reachability check for /api/health.
+     * The app can save when the purchase database answers. A slow inventory
+     * ping must not mark the whole server down, and overlapping probes share
+     * one check so they do not fill the connection pool.
      */
     async pingDatabases(timeoutMs = 5000) {
-        const ms = Math.max(1000, Math.min(15000, Number(timeoutMs) || 5000));
-        const started = Date.now();
-        const timeout = new Promise((_, reject) => {
-            setTimeout(() => reject(Object.assign(new Error("DB_PING_TIMEOUT"), { code: "ETIMEDOUT" })), ms);
-        });
-        // Use short-lived connections so a saturated app pool cannot make /api/health
-        // report the whole server as down.
-        const pingOne = async (database) => {
-            const conn = await mysql.createConnection({
-                host: process.env.MYSQL_HOST,
-                port: parseInt(process.env.MYSQL_PORT || "3306", 10),
-                user: process.env.MYSQL_USER,
-                password: process.env.MYSQL_PASSWORD,
-                database,
-                connectTimeout: Math.min(ms, 4000),
-            });
-            try {
-                await conn.query("SELECT 1 AS ok");
-            } finally {
-                await conn.end().catch(() => {});
-            }
-        };
-        try {
-            await Promise.race([
-                Promise.all([
-                    pingOne(process.env.MYSQL_PURCHASE_DATABASE || "db_purchase"),
-                    pingOne(process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory"),
-                ]),
-                timeout,
+        if (pingInflight) return pingInflight;
+        const ms = Math.max(1000, Math.min(8000, Number(timeoutMs) || 5000));
+        pingInflight = (async () => {
+            const started = Date.now();
+            const [purchase, inventory] = await Promise.all([
+                pingDatabase(process.env.MYSQL_PURCHASE_DATABASE || "db_purchase", ms),
+                pingDatabase(process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory", Math.min(ms, 2500)),
             ]);
-            return { ok: true, ms: Date.now() - started };
-        } catch (err) {
+            if (!inventory.ok) {
+                console.warn("[MySQL health] inventory database slow or unreachable:", inventory.error || "timeout");
+            }
             return {
-                ok: false,
+                ok: purchase.ok,
+                purchase: purchase.ok,
+                inventory: inventory.ok,
                 ms: Date.now() - started,
-                error: err?.code || err?.message || "database unreachable",
+                error: purchase.ok ? null : (purchase.error || "database unreachable"),
             };
-        }
+        })().finally(() => {
+            pingInflight = null;
+        });
+        return pingInflight;
     },
 };

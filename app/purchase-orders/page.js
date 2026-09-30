@@ -1130,9 +1130,15 @@ export default function PurchaseOrdersPage() {
                 }
             }
 
-            // Column Status overrides toolbar Status when set
+            // Column Status overrides toolbar Status when set.
+            // A vendor-name search must still find that vendor when every matching
+            // order is Closed. The Active toolbar would otherwise hide them.
             if (!columnFilters.userStatus && !overdueShipOutFilter) {
-                const effectiveStatus = String(col.status || status || "").trim();
+                const typedVendor = String(col.vendorName || "").trim();
+                const toolbarText = String(debSearch || "").trim();
+                const toolbarIsOrder = /^[A-Za-z]{1,8}\d{4,}$/.test(toolbarText.replace(/\s+/g, ""));
+                const nameSearch = typedVendor || (toolbarText && !toolbarIsOrder ? toolbarText : "");
+                const effectiveStatus = String(col.status || (nameSearch ? "" : status) || "").trim();
                 if (effectiveStatus) params.set("status", effectiveStatus);
             }
 

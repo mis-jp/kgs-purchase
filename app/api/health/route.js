@@ -8,7 +8,8 @@ const NO_STORE = { headers: { "Cache-Control": "no-store" } };
 
 /**
  * GET /api/health
- * Public lightweight check: app process + MySQL reachability.
+ * Public lightweight check: app process + purchase database (where input is saved).
+ * A slow inventory database is reported, but it does not by itself mean the server is down.
  */
 export async function GET() {
     const db = await MySqlService.pingDatabases(5000);
@@ -18,6 +19,8 @@ export async function GET() {
                 ok: false,
                 app: true,
                 database: false,
+                purchase: false,
+                inventory: !!db.inventory,
                 reason: "server",
                 message: "Unable to reach the database server.",
                 ms: db.ms,
@@ -31,6 +34,8 @@ export async function GET() {
             ok: true,
             app: true,
             database: true,
+            purchase: true,
+            inventory: db.inventory !== false,
             reason: null,
             ms: db.ms,
         },

@@ -998,7 +998,9 @@ export default function ReplenishmentPage() {
                             </select>
                         </label>
                         <span className="db-stat-sub">
-                            {windowNotice || (isAdmin ? "Default is 3 months. Applies to every branch." : "Set by an admin. Default is 3 months.")}
+                            {windowNotice || (isAdmin
+                                ? `Uses the last ${salesMonths || "3"} ${salesUnit} of sales on every branch.`
+                                : "Set by an admin. Default is 3 months.")}
                         </span>
                         {isAdmin ? (
                             <button type="submit" className="repl-window-save" disabled={savingWindow}>
@@ -1220,7 +1222,11 @@ export default function ReplenishmentPage() {
                                                 at branch <strong>{selectedBranch}</strong> — not today&apos;s sales alone.
                                             </p>
                                             <p className="repl-col-info-formula">
-                                                Sells / day = Net units sold in the last {Number(meta?.salesLookbackDays) || 90} days at {selectedBranch} ÷ {Number(meta?.salesLookbackDays) || 90}
+                                                Sells / day = Net units sold
+                                                {meta?.salesWindowUnit === "months"
+                                                    ? ` in the last ${meta.salesWindowValue} calendar month${Number(meta.salesWindowValue) === 1 ? "" : "s"} (${Number(meta.salesLookbackDays) || 0} days)`
+                                                    : ` in the last ${Number(meta?.salesLookbackDays) || 90} days`}
+                                                {" "}at {selectedBranch} ÷ {Number(meta?.salesLookbackDays) || 90}
                                             </p>
                                             <p>
                                                 Uses this branch’s invoice sales first (credit memos subtracted). Network-wide
