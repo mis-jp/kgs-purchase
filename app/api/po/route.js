@@ -114,6 +114,7 @@ export async function GET(request) {
         const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
         const pageSize = Math.min(100, parseInt(searchParams.get("pageSize") || "10"));
         const search = (searchParams.get("search") || "").trim();
+        const orderNbr = (searchParams.get("orderNbr") || "").trim();
         const startDate = searchParams.get("startDate") || "";
         const endDate = searchParams.get("endDate") || "";
         const status = searchParams.get("status") || "";
@@ -132,13 +133,13 @@ export async function GET(request) {
         const poCred = await resolvePoCredential(request);
         const companyId = getActiveCompanyFromRequest(request) || "main";
 
-        const fetchParams = { page, pageSize, search, startDate, endDate, status, branch, vendorId, companyId, orderNbrs };
+        const fetchParams = { page, pageSize, search, orderNbr, startDate, endDate, status, branch, vendorId, companyId, orderNbrs };
 
         if (source === "mysql") {
             try {
                 // Background only — never block the PO list behind Acumatica align
                 // or heavy MySQL repairs (those were causing nginx HTTP 504s).
-                kickCached("po:align-open-status-v4-terminal", 10 * 60_000, async () => {
+                kickCached("po:align-open-status-v5-hold", 10 * 60_000, async () => {
                     const cred = poCred && poCred !== "__bypass__"
                         ? poCred
                         : await getSystemAcumaticaCredential();

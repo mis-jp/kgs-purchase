@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef, memo } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import { withBasePath } from "@/lib/base-path";
 import PaginationBar from "@/components/PaginationBar";
-import { isLocalAdminUser } from "@/lib/user-access-client";
+import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import "@/styles/dashboard.css";
 
 /* ── SVG Icons ─────────────────────────────────────────────── */
@@ -262,6 +262,7 @@ InventoryRow.displayName = "InventoryRow";
 export default function DashboardPage() {
     /* ── State ────────────────────────────────────────────── */
     const [selectedBranch, setSelectedBranch] = useState("");
+    const [allowAllBranches, setAllowAllBranches] = useState(false);
     const [search, setSearch] = useState("");
     const [page, setPage] = useState(1);
     const [userName, setUserName] = useState("User");
@@ -373,9 +374,11 @@ export default function DashboardPage() {
                         .filter((b, i, arr) => arr.findIndex(x => x.id === b.id) === i)
                         .sort((a, z) => a.name.localeCompare(z.name));
                     setBranchOptions(options);
+                    const allowAll = await loadAllBranchesAccess(fetchWithAuth);
+                    setAllowAllBranches(allowAll);
 
                     if (!selectedBranch || !options.some((b) => b.id === selectedBranch)) {
-                        if (!isLocalAdminUser()) {
+                        if (!allowAll) {
                             if (options[0]) setSelectedBranch(options[0].id);
                         } else {
                             const main = options.find(b => b.id.toUpperCase() === "MAIN") || options.find(b => b.id.toUpperCase().includes("MAIN"));
@@ -587,7 +590,7 @@ export default function DashboardPage() {
                         <div className="db-select-wrapper" data-tour="branch-filter">
                             <IconFilter />
                             <select className="db-select" value={selectedBranch} onChange={(e) => handleBranchChange(e.target.value)} aria-label="Branch filter">
-                                {isLocalAdminUser() ? <option value="">All Branches</option> : null}
+                                {allowAllBranches ? <option value="">All Branches</option> : null}
                                 {branchOptions.map(b => <option key={b.id} value={b.id}>{b.id}</option>)}
                             </select>
                             <IconChevron />

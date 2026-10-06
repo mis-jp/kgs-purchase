@@ -315,13 +315,17 @@ export default function SyncingClient() {
 
                         if (data.section) {
                             setSections((prev) => {
+                                const previous = prev[data.section] || {};
+                                const nextProgress = Number.isFinite(Number(data.progress))
+                                    ? Number(data.progress)
+                                    : (previous.progress || 0);
                                 const next = {
                                     ...prev,
                                     [data.section]: {
-                                        status: data.status,
-                                        details: data.details,
-                                        progress: data.progress || 0,
-                                        count: data.count || prev[data.section]?.count || 0,
+                                        status: data.status || previous.status,
+                                        details: data.details || previous.details,
+                                        progress: data.status === "done" ? 100 : nextProgress,
+                                        count: data.count || previous.count || 0,
                                     },
                                 };
                                 const vals = Object.values(next);
@@ -731,7 +735,11 @@ export default function SyncingClient() {
                                             </div>
                                             <span
                                                 className={`sync-section-pct ${
-                                                    data.status === "done" ? "is-done" : ""
+                                                    data.status === "done"
+                                                        ? "is-done"
+                                                        : data.status === "error"
+                                                          ? "is-error"
+                                                          : ""
                                                 }`}
                                             >
                                                 {data.progress}%
@@ -740,7 +748,7 @@ export default function SyncingClient() {
                                         <div className="sync-section-track">
                                             <div
                                                 className={`sync-section-bar ${
-                                                    error
+                                                    data.status === "error"
                                                         ? "is-error"
                                                         : data.status === "done"
                                                         ? "is-done"

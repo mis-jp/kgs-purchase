@@ -14,6 +14,7 @@ const EMPTY_FORM = {
     role: "user",
     active: true,
     branchIds: [],
+    allBranches: false,
     moduleAccess: "all",
 };
 
@@ -163,7 +164,8 @@ export default function AdminPage() {
             email: user.email || "",
             role: user.role || "user",
             active: user.active !== false,
-            branchIds: Array.isArray(user.branchIds) ? user.branchIds : [],
+            branchIds: user.allBranches ? [] : (Array.isArray(user.branchIds) ? user.branchIds : []),
+            allBranches: user.role === "admin" || !!user.allBranches,
             moduleAccess: Array.isArray(user.allowedModules) && user.allowedModules.includes("forecast-generator")
                 ? "forecast-generator"
                 : "all",
@@ -180,8 +182,9 @@ export default function AdminPage() {
         setError("");
         setNotice("");
         try {
-            if (form.role === "user" && !(form.branchIds || []).length) {
-                throw new Error("Select at least one branch for this user.");
+            const grantAll = form.role === "admin" || !!form.allBranches;
+            if (form.role === "user" && !grantAll && !(form.branchIds || []).length) {
+                throw new Error("Select at least one branch, or choose All branches.");
             }
             const payload = {
                 username: form.username,
@@ -189,7 +192,8 @@ export default function AdminPage() {
                 email: form.email,
                 role: form.role,
                 active: form.active,
-                branchIds: form.role === "admin" ? [] : form.branchIds,
+                allBranches: grantAll,
+                branchIds: grantAll ? [] : form.branchIds,
                 moduleAccess: form.role === "admin" ? "all" : form.moduleAccess,
             };
             if (form.password) payload.password = form.password;
@@ -220,6 +224,7 @@ export default function AdminPage() {
             if (data.user?.id === me?.id) {
                 localStorage.setItem("userName", data.user.fullName || data.user.username);
                 localStorage.setItem("userRole", data.user.role);
+                localStorage.setItem("userAllBranches", data.user.role === "admin" || data.user.allBranches ? "1" : "0");
             }
         } catch (err) {
             setError(err.message || "Save failed");
@@ -479,19 +484,19 @@ export default function AdminPage() {
                     <div className="admin-branch-picker" ref={branchPickerRef}>
                         <div className="admin-branch-picker-head">
                             <span>Branch access</span>
-                            {form.role === "user" && (
+                            {form.role === "user" && !form.allBranches && (
                                 <span className="admin-branch-picker-actions">
                                     <button
                                         type="button"
                                         className="admin-link"
-                                        onClick={() => setForm((f) => ({ ...f, branchIds: branchOptions.map((b) => b.id) }))}
+                                        onClick={() => setForm((f) => ({ ...f, allBranches: true, branchIds: [] }))}
                                     >
-                                        Select all
+                                        All branches
                                     </button>
                                     <button
                                         type="button"
                                         className="admin-link"
-                                        onClick={() => setForm((f) => ({ ...f, branchIds: [] }))}
+                                        onClick={() => setForm((f) => ({ ...f, allBranches: false, branchIds: [] }))}
                                     >
                                         Clear
                                     </button>
@@ -500,6 +505,18 @@ export default function AdminPage() {
                         </div>
                         {form.role === "admin" ? (
                             <p className="admin-header-hint">Admins can view all branches and modules. Limits apply to User accounts only.</p>
+                        ) : form.allBranches ? (
+                            <div className="admin-branch-all">
+                                <label className="admin-check">
+                                    <input
+                                        type="checkbox"
+                                        checked
+                                        onChange={() => setForm((f) => ({ ...f, allBranches: false }))}
+                                    />
+                                    All branches
+                                </label>
+                                <p className="admin-header-hint">This account can open every branch. Uncheck to choose specific branches.</p>
+                            </div>
                         ) : (
                             <>
                                 {form.moduleAccess === "forecast-generator" && (

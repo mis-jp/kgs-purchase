@@ -10,10 +10,8 @@ import {
     isUnauthorizedError,
     hasSystemAcumaticaCredentials,
 } from "@/lib/sync-acumatica-auth";
-import { alignAllOpenPurchaseOrderStatuses } from "@/lib/po-open-status-align";
-import { ensurePurchaseVendorNames } from "@/lib/po-vendor-names";
+import { syncChangedPurchaseOrders } from "@/lib/po-live-sync";
 import mysql from "mysql2/promise";
-import { isPoLineCompleted } from "@/lib/open-po-match.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -551,7 +549,9 @@ export async function POST(request) {
                         lastSalesSync = formatOData(d);
                     }
                     if (lastPoSync) {
-                        const d = new Date(new Date(lastPoSync).getTime() - (5 * 60 * 1000));
+                        // A later page can fail after an earlier page stamps last_sync.
+                        // Look back far enough to retry those orders on the next Quick Sync.
+                        const d = new Date(new Date(lastPoSync).getTime() - (21 * 24 * 60 * 60 * 1000));
                         lastPoSync = formatOData(d);
                     }
 
@@ -975,165 +975,35 @@ export async function POST(request) {
 
                 // 3.5 PURCHASE ORDERS (Incoming PO Details — runs with inventory or sales sync)
                 if (options.sales || options.inventory) {
-                    send({ section: "Incoming PO", details: "Updating purchase order details...", progress: 50 });
+                    send({ section: "Incoming PO", details: "Updating purchase orders from Acumatica...", progress: 10 });
                     try {
-                        let poStart = options.startDate || "2024-01-01";
-                        if (isDelta && lastPoSync) {
-                            // Prefer last PO watermark day so receipt map stays light
-                            poStart = String(lastPoSync).slice(0, 10) || poStart;
-                        }
-                        const receiptDateByOrder = await buildReceiptDateMap(ACU_BASE, poStart);
-
-                        let poFilter;
-                        if (isDelta && lastPoSync) {
-                            poFilter = `LastModifiedDateTime gt datetimeoffset'${lastPoSync}' and Status ne 'Cancelled'`;
-                        } else {
-                            poFilter = `Date ge datetimeoffset'${poStart}T00:00:00Z' and Status ne 'Cancelled'`;
-                        }
-
-                        let poSkip = 0;
-                        let poTotal = 0;
-                        let usedPoFallback = false;
-                        const acuOpenOrderNbrs = [];
-                        while (!signal.aborted) {
-                            let orders = [];
-                            try {
-                                const url = `${ACU_BASE}/PurchaseOrder?$expand=Details&$top=50&$skip=${poSkip}&$filter=${encodeURIComponent(poFilter)}`;
-                                const res = await AcumaticaService.fetchWithRetry(url, effectiveCookie);
-                                const data = await res.json();
-                                orders = parseAcumaticaRows(data);
-                            } catch (poFetchErr) {
-                                if (isDelta && lastPoSync && !usedPoFallback) {
-                                    console.warn(
-                                        ">>> [Sync API] PO LastModifiedDateTime failed — falling back to Date filter:",
-                                        poFetchErr.message
-                                    );
-                                    usedPoFallback = true;
-                                    poFilter = `Date ge datetimeoffset'${poStart}T00:00:00Z' and Status ne 'Cancelled'`;
-                                    poSkip = 0;
-                                    continue;
-                                }
-                                throw poFetchErr;
-                            }
-                            if (orders.length === 0) break;
-
-                            const historyRows = [];
-                            const lineRows = [];
-                            for (const o of orders) {
-                                const orderNbr = getF(o, "OrderNbr");
-                                const status = getF(o, "Status");
-                                if (String(status || "").trim() === "Open" && orderNbr) {
-                                    acuOpenOrderNbrs.push(String(orderNbr).trim());
-                                }
-
-                                let details = o.Details || o.Transactions || [];
-                                if (details.value) details = details.value;
-                                if (!Array.isArray(details)) details = [];
-
-                                let lineExtSum = 0;
-                                for (const d of details) {
-                                    const orderQty = parseFloat(getAny(d, "OrderQty", "Qty") || 0);
-                                    const receivedQty = parseFloat(getAny(
-                                        d,
-                                        "QtyOnReceipts",
-                                        "ReceivedQty",
-                                        "QtyReceived",
-                                        "ReceivedQuantity"
-                                    ) || 0);
-                                    const lineCompleted = isPoLineCompleted(getAny(d, "Completed", "LineCompleted"));
-                                    // Destination warehouse from the PO line only — never the document header
-                                    // branch (often MAIN), or branch POs get mis-counted as MAIN Coming PO.
-                                    const warehouseId = String(
-                                        getAny(d, "WarehouseID", "SiteID", "DestinationWarehouseID") ||
-                                        getAny(d, "BranchID", "Branch") ||
-                                        ""
-                                    ).trim();
-                                    const extCost = parseFloat(getAny(d, "ExtendedCost", "LineAmount") || 0) || 0;
-                                    lineExtSum += extCost;
-                                    lineRows.push({
-                                        order_nbr: getF(o, "OrderNbr"),
-                                        line_nbr: parseInt(getF(d, "LineNbr") || 0),
-                                        inventory_id: getF(d, "InventoryID"),
-                                        description: getAny(d, "LineDescription", "Description"),
-                                        qty: orderQty,
-                                        received_qty: receivedQty,
-                                        line_completed: lineCompleted,
-                                        uom: getF(d, "UOM"),
-                                        warehouse_id: warehouseId || null,
-                                        branch_id: warehouseId || null,
-                                        ext_cost: extCost,
-                                        last_sync: new Date()
-                                    });
-                                }
-
-                                const orderTotal = parseFloat(getF(o, "OrderTotal") || 0) || 0;
-                                const controlTotal = parseFloat(getF(o, "ControlTotal") || 0) || 0;
-                                historyRows.push({
-                                    order_nbr: orderNbr,
-                                    vendor_id: getF(o, "VendorID"),
-                                    vendor_name: getAny(o, "VendorName", "VendorID_description", "VendorDescription"),
-                                    status,
-                                    order_date: getF(o, "Date"),
-                                    promised_date: getF(o, "PromisedOn"),
-                                    receipt_date: resolveReceiptDate(o, receiptDateByOrder),
-                                    // Prefer OrderTotal; On Hold drafts often only populate ControlTotal / lines
-                                    total_amount: orderTotal || controlTotal || lineExtSum
-                                });
-                            }
-                            if (historyRows.length > 0) await MySqlService.upsertPurchaseHistory(historyRows);
-                            if (lineRows.length > 0) await MySqlService.upsertPurchaseOrderDetails(lineRows);
-                            await MySqlService.backfillPurchaseHistoryVendorNames();
-                            await MySqlService.repairPurchaseOrderAmounts();
-                            await MySqlService.normalizePurchaseOrderStatusAliases();
-
-                            poTotal += orders.length;
-                            poSkip += orders.length;
-                            const poProg = Math.min(99, 65 + Math.floor(poTotal / 5));
-                            send({
+                        const batch = await syncChangedPurchaseOrders({
+                            cookie: effectiveCookie,
+                            onProgress: (info) => send({
                                 section: "Incoming PO",
-                                details: `Synced ${poTotal} purchase order(s)…`,
-                                progress: poProg,
-                                count: poTotal,
-                            });
-                            if (orders.length < 50) break;
-                        }
-                        poRowsSynced = poTotal;
-                        // Global Open align for ALL vendors — never Softie-only and never
-                        // the incomplete sync-batch Open list (that closed ERP-Open + receipt).
-                        try {
-                            const alignStart = String(poStart || "2024-01-01").slice(0, 10);
-                            const aligned = await alignAllOpenPurchaseOrderStatuses({
-                                cookie: effectiveCookie,
-                                startDate: alignStart,
-                                closeStale: true,
-                            });
-                            if (!aligned.skipped && (aligned.opened || aligned.closed || aligned.openSet)) {
-                                console.log(
-                                    `>>> [Sync API] PO status align (global): openSet=${aligned.openSet}, opened=${aligned.opened}, closed=${aligned.closed}`
-                                );
-                            }
-                            if (aligned.skipped && acuOpenOrderNbrs.length > 0) {
-                                await MySqlService.applyAcumaticaOpenPoStatuses(acuOpenOrderNbrs, {
-                                    closeStale: false,
-                                });
-                            }
-                        } catch (alignErr) {
-                            console.warn(">>> [Sync API] PO Open status align skipped:", alignErr.message);
-                        }
-                        try {
-                            const named = await ensurePurchaseVendorNames({ cookie: effectiveCookie });
-                            if (named.upserted > 0) {
-                                await MySqlService.backfillPurchaseHistoryVendorNames();
-                                console.log(`>>> [Sync API] Filled ${named.upserted} vendor name(s) from Acumatica.`);
-                            }
-                        } catch (vendorNameErr) {
-                            console.warn(">>> [Sync API] Vendor name fill skipped:", vendorNameErr.message);
-                        }
-                        await MySqlService.logSyncEvent(options.mode, "Incoming PO", "completed", poTotal);
-                        send({ section: "Incoming PO", status: "done", details: "Purchase order sync complete.", progress: 100 });
+                                details: info.details,
+                                progress: info.progress,
+                                count: info.count || 0,
+                            }),
+                        });
+                        poRowsSynced = batch.synced || 0;
+                        await MySqlService.logSyncEvent(options.mode, "Incoming PO", "completed", poRowsSynced);
+                        send({
+                            section: "Incoming PO",
+                            status: "done",
+                            details: `Purchase order sync complete (${poRowsSynced} orders).`,
+                            progress: 100,
+                            count: poRowsSynced,
+                        });
                     } catch (poErr) {
                         console.error(">>> [Sync API] PO sync error:", poErr.message);
                         await MySqlService.logSyncEvent(options.mode, "Incoming PO", "error", 0, poErr.message);
+                        send({
+                            section: "Incoming PO",
+                            status: "error",
+                            details: poErr.message || "Purchase order sync failed",
+                            progress: 100,
+                        });
                     }
                 }
 

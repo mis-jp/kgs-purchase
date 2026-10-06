@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import PaginationBar from "@/components/PaginationBar";
-import { isLocalAdminUser } from "@/lib/user-access-client";
+import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import {
     computeForecastFields,
     getDefaultForecastPeriods,
@@ -74,6 +74,7 @@ function displayRow(row, draft) {
 export default function ForecastGeneratorPage() {
     const [mounted, setMounted] = useState(false);
     const [selectedBranch, setSelectedBranch] = useState("");
+    const [allowAllBranches, setAllowAllBranches] = useState(false);
     const [branchOptions, setBranchOptions] = useState([]);
     const [last3From, setLast3From] = useState(monthInputValue(DEFAULTS.last3Start));
     const [last3To, setLast3To] = useState(monthInputValue(DEFAULTS.last3End));
@@ -156,7 +157,9 @@ export default function ForecastGeneratorPage() {
                     .filter((b, i, arr) => arr.findIndex((x) => x.id === b.id) === i)
                     .sort((a, z) => a.id.localeCompare(z.id));
                 setBranchOptions(options);
-                if (!isLocalAdminUser() && options[0] && !options.some((b) => b.id === selectedBranch)) {
+                const allowAll = await loadAllBranchesAccess(fetchWithAuth);
+                setAllowAllBranches(allowAll);
+                if (!allowAll && options[0] && !options.some((b) => b.id === selectedBranch)) {
                     setSelectedBranch(options[0].id);
                 }
             } catch { /* ignore */ }
@@ -607,7 +610,7 @@ export default function ForecastGeneratorPage() {
                                 onChange={(e) => setSelectedBranch(e.target.value)}
                                 aria-label="Branch filter"
                             >
-                                {isLocalAdminUser() ? <option value="">All Branches</option> : null}
+                                {allowAllBranches ? <option value="">All Branches</option> : null}
                                 {branchOptions.map((b) => (
                                     <option key={b.id} value={b.id}>{b.id}</option>
                                 ))}

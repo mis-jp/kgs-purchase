@@ -499,11 +499,11 @@ export const MySqlService = {
      * Fetch purchase orders from MySQL (for Purchase Orders module).
      * No TTL cache — lists must stay live after sync / receipt updates.
      */
-    async getPurchaseOrders({ page = 1, pageSize = 50, search = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true } = {}) {
-        return this._getPurchaseOrdersImpl({ page, pageSize, search, status, startDate, endDate, branch, vendorId, companyId, orderNbrs, excludeZeroQty });
+    async getPurchaseOrders({ page = 1, pageSize = 50, search = "", orderNbr = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true } = {}) {
+        return this._getPurchaseOrdersImpl({ page, pageSize, search, orderNbr, status, startDate, endDate, branch, vendorId, companyId, orderNbrs, excludeZeroQty });
     },
 
-    async _getPurchaseOrdersImpl({ page = 1, pageSize = 50, search = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true } = {}) {
+    async _getPurchaseOrdersImpl({ page = 1, pageSize = 50, search = "", orderNbr = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true } = {}) {
         const offset = (page - 1) * pageSize;
         const limitInt = parseInt(pageSize, 10);
         const offsetInt = parseInt(offset, 10);
@@ -552,7 +552,13 @@ export const MySqlService = {
                 params.push(String(endDate).slice(0, 10));
             }
 
-            if (search) {
+            const orderNbrQuery = String(orderNbr || "").trim();
+            if (orderNbrQuery) {
+                whereClauses.push("h.order_nbr LIKE ?");
+                params.push(`%${orderNbrQuery}%`);
+            }
+
+            if (search && !orderNbrQuery) {
                 // Order # / Vendor / Item ID only.
                 // Do NOT match line descriptions — brand text (e.g. "Sofie … Vinyl") collides
                 // with vendor-name searches and buries the real vendor POs under unrelated orders.
@@ -728,16 +734,21 @@ export const MySqlService = {
                 vendor_name = COALESCE(NULLIF(VALUES(vendor_name), ''), vendor_name),
                 status = VALUES(status),
                 order_date = COALESCE(VALUES(order_date), order_date),
-                promised_date = COALESCE(NULLIF(VALUES(promised_date), ''), promised_date),
+                promised_date = COALESCE(VALUES(promised_date), promised_date),
                 receipt_date = COALESCE(VALUES(receipt_date), receipt_date),
                 total_amount = IF(VALUES(total_amount) > 0, VALUES(total_amount), COALESCE(NULLIF(total_amount, 0), VALUES(total_amount))),
                 last_sync = VALUES(last_sync)
             `;
             const dateOrNull = (value) => {
                 if (value == null) return null;
+                if (value instanceof Date) {
+                    return Number.isNaN(value.getTime()) || value.getFullYear() < 2000 ? null : value;
+                }
                 const s = String(value).trim();
-                if (!s || s.startsWith("0000-00-00")) return null;
-                return s;
+                if (!s || s.startsWith("0000-00-00") || s.startsWith("0001-01-01")) return null;
+                const parsed = new Date(s);
+                if (Number.isNaN(parsed.getTime()) || parsed.getFullYear() < 2000) return null;
+                return parsed;
             };
             const values = rows.map(r => {
                 const status = normalizeErpPoStatus(r.status);
@@ -750,7 +761,7 @@ export const MySqlService = {
                     dateOrNull(r.promised_date),
                     dateOrNull(r.receipt_date),
                     r.total_amount,
-                    new Date()
+                    dateOrNull(r.last_sync) || new Date()
                 ];
             });
             await connection.query(sql, [values]);
@@ -3663,6 +3674,21 @@ export const MySqlService = {
                     console.warn("[MySQL app_users allowed_modules]", alterErr.message);
                 }
             }
+            try {
+                const [[allCol]] = await purchasePool.query(
+                    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'app_users' AND COLUMN_NAME = 'all_branches'`
+                );
+                if (!Number(allCol?.cnt)) {
+                    await purchasePool.query(
+                        `ALTER TABLE app_users ADD COLUMN all_branches TINYINT(1) NOT NULL DEFAULT 0 AFTER allowed_modules`
+                    );
+                }
+            } catch (alterErr) {
+                if (!/duplicate column/i.test(alterErr.message)) {
+                    console.warn("[MySQL app_users all_branches]", alterErr.message);
+                }
+            }
             MySqlService._appUsersReady = true;
             await this.ensureAppUserBranchesTable();
             return true;
@@ -3782,7 +3808,7 @@ export const MySqlService = {
     async getAppUserByUsername(username) {
         await this.ensureAppUsersTable();
         const [rows] = await purchasePool.execute(
-            `SELECT id, username, password_hash, full_name, email, role, allowed_modules, active, created_at, updated_at
+            `SELECT id, username, password_hash, full_name, email, role, allowed_modules, all_branches, active, created_at, updated_at
              FROM app_users WHERE username = ? LIMIT 1`,
             [String(username || "").trim()]
         );
@@ -3792,7 +3818,7 @@ export const MySqlService = {
     async getAppUserById(id) {
         await this.ensureAppUsersTable();
         const [rows] = await purchasePool.execute(
-            `SELECT id, username, password_hash, full_name, email, role, allowed_modules, active, created_at, updated_at
+            `SELECT id, username, password_hash, full_name, email, role, allowed_modules, all_branches, active, created_at, updated_at
              FROM app_users WHERE id = ? LIMIT 1`,
             [Number(id)]
         );
@@ -3802,7 +3828,7 @@ export const MySqlService = {
     async listAppUsers() {
         await this.ensureAppUsersTable();
         const [rows] = await purchasePool.execute(
-            `SELECT id, username, full_name, email, role, allowed_modules, active, created_at, updated_at
+            `SELECT id, username, full_name, email, role, allowed_modules, all_branches, active, created_at, updated_at
              FROM app_users
              ORDER BY role ASC, username ASC`
         );
@@ -3813,18 +3839,20 @@ export const MySqlService = {
         }));
     },
 
-    async createAppUser({ username, passwordHash, fullName = "", email = "", role = "user", active = true, allowedModules = null }) {
+    async createAppUser({ username, passwordHash, fullName = "", email = "", role = "user", active = true, allowedModules = null, allBranches = false }) {
         await this.ensureAppUsersTable();
+        const isAdmin = role === "admin";
         const [result] = await purchasePool.execute(
-            `INSERT INTO app_users (username, password_hash, full_name, email, role, allowed_modules, active)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO app_users (username, password_hash, full_name, email, role, allowed_modules, all_branches, active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 String(username).trim(),
                 passwordHash,
                 String(fullName || "").trim() || null,
                 String(email || "").trim() || null,
-                role === "admin" ? "admin" : "user",
-                role === "admin" ? null : allowedModules,
+                isAdmin ? "admin" : "user",
+                isAdmin ? null : allowedModules,
+                isAdmin || allBranches ? 1 : 0,
                 active ? 1 : 0,
             ]
         );
@@ -3858,6 +3886,10 @@ export const MySqlService = {
         if (fields.allowedModules !== undefined) {
             sets.push("allowed_modules = ?");
             params.push(fields.role === "admin" ? null : fields.allowedModules);
+        }
+        if (fields.allBranches !== undefined) {
+            sets.push("all_branches = ?");
+            params.push(fields.allBranches ? 1 : 0);
         }
         if (fields.active !== undefined) {
             sets.push("active = ?");
@@ -5712,6 +5744,30 @@ export const MySqlService = {
         `);
         MySqlService._appSettingsReady = true;
         return true;
+    },
+
+    async getAppSetting(key) {
+        try {
+            await this.ensureAppSettingsTable();
+            const [rows] = await purchasePool.query(
+                `SELECT setting_value FROM app_settings WHERE setting_key = ? LIMIT 1`,
+                [key]
+            );
+            return rows[0]?.setting_value ?? null;
+        } catch (err) {
+            console.warn("[MySQL getAppSetting]", err.message);
+            return null;
+        }
+    },
+
+    async setAppSetting(key, value) {
+        await this.ensureAppSettingsTable();
+        await purchasePool.query(
+            `INSERT INTO app_settings (setting_key, setting_value, updated_at)
+             VALUES (?, ?, NOW())
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()`,
+            [key, String(value)]
+        );
     },
 
     /** Global Replenishment sales window. Default 3 months (90 days). */

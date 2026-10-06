@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, memo, Fragment, useMemo } from "react
 import { useRouter } from "next/navigation";
 import { fetchWithAuth } from "@/lib/api-client";
 import PaginationBar from "@/components/PaginationBar";
-import { isLocalAdminUser } from "@/lib/user-access-client";
+import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import "@/styles/dashboard.css";
 import "@/styles/sales.css";
 
@@ -62,6 +62,7 @@ export default function SalesPeriodicPage() {
 
     /* ── State ────────────────────────────────────────────── */
     const [selectedBranch, setSelectedBranch] = useState("");
+    const [allowAllBranches, setAllowAllBranches] = useState(false);
     const [targetDate, setTargetDate] = useState(new Date().toISOString().split('T')[0]);
     const [branchOptions, setBranchOptions] = useState([]);
     const [allSalesData, setAllSalesData] = useState([]);
@@ -115,7 +116,9 @@ export default function SalesPeriodicPage() {
                     .sort((a, z) => a.name.localeCompare(z.name));
 
                     setBranchOptions(options);
-                    if (!isLocalAdminUser() && options[0] && !options.some((b) => b.id === selectedBranch)) {
+                    const allowAll = await loadAllBranchesAccess(fetchWithAuth);
+                    setAllowAllBranches(allowAll);
+                    if (!allowAll && options[0] && !options.some((b) => b.id === selectedBranch)) {
                         setSelectedBranch(options[0].id);
                     }
                 }
@@ -277,7 +280,7 @@ export default function SalesPeriodicPage() {
                             <label><BranchIcon /> Branch / Warehouse</label>
                             <div className="sales-select-wrap">
                                 <select className="sales-select" value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)}>
-                                    {isLocalAdminUser() ? <option value="">All Branches</option> : null}
+                                    {allowAllBranches ? <option value="">All Branches</option> : null}
                                     {branchOptions.map((b) => (
                                         <option key={b.id || b} value={b.id || b}>{b.name || b}</option>
                                     ))}

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { MySqlService } from "@/services/mysql";
 import {
     requireAdmin,
-    sanitizeUser,
     sanitizeUserWithBranches,
     hashPassword,
     validateUsername,
@@ -19,7 +18,8 @@ export async function GET(request) {
         await requireAdmin(request);
         await MySqlService.ensureAppUsersTable();
         const rows = await MySqlService.listAppUsers();
-        return NextResponse.json({ users: rows.map((row) => sanitizeUser(row)) });
+        const users = await Promise.all(rows.map((row) => sanitizeUserWithBranches(row)));
+        return NextResponse.json({ users });
     } catch (err) {
         const status = err.status || 500;
         return NextResponse.json({ message: err.message || "Failed to list users" }, { status });
@@ -48,10 +48,11 @@ export async function POST(request) {
             return NextResponse.json({ message: "Username already exists." }, { status: 409 });
         }
 
+        const grantAll = role === "admin" || body.allBranches === true;
         const branchIds = normalizeBranchIds(body.branchIds);
-        if (role === "user" && !branchIds.length) {
+        if (role === "user" && !grantAll && !branchIds.length) {
             return NextResponse.json(
-                { message: "Select at least one branch for this user." },
+                { message: "Select at least one branch, or choose All branches." },
                 { status: 400 }
             );
         }
@@ -68,8 +69,9 @@ export async function POST(request) {
             role,
             active,
             allowedModules,
+            allBranches: grantAll,
         });
-        await MySqlService.setAppUserBranches(id, role === "admin" ? [] : branchIds);
+        await MySqlService.setAppUserBranches(id, grantAll ? [] : branchIds);
         const created = await MySqlService.getAppUserById(id);
         return NextResponse.json({ user: await sanitizeUserWithBranches(created) }, { status: 201 });
     } catch (err) {

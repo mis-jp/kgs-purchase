@@ -136,6 +136,10 @@ export default function Sidebar() {
           setUserRole(data.user.role);
           localStorage.setItem("userRole", data.user.role);
         }
+        localStorage.setItem(
+          "userAllBranches",
+          data.user.role === "admin" || data.user.allBranches ? "1" : "0"
+        );
         const modules = Array.isArray(data.user.allowedModules) ? data.user.allowedModules : [];
         setAllowedModules(modules);
         storeAllowedModules(modules);
@@ -243,11 +247,13 @@ export default function Sidebar() {
   return (
     <>
       <button
+        type="button"
         className={`sidebar-mobile-toggle ${isOpen ? "is-hidden" : ""}`}
         onClick={() => setIsOpen(true)}
         aria-label="Open Menu"
         aria-expanded={isOpen}
         aria-controls="main-sidebar"
+        suppressHydrationWarning
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <line x1="3" y1="12" x2="21" y2="12" /><line x1="3" y1="6" x2="21" y2="6" /><line x1="3" y1="18" x2="21" y2="18" />
@@ -267,9 +273,11 @@ export default function Sidebar() {
         <div className="sidebar-header">
           {/* Mobile Close Button */}
           <button
+            type="button"
             className="sidebar-close-mobile"
             onClick={() => setIsOpen(false)}
             aria-label="Close Sidebar"
+            suppressHydrationWarning
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -330,6 +338,7 @@ export default function Sidebar() {
         </nav>
 
         <button
+          type="button"
           className="sidebar-collapse-btn"
           onClick={toggleCollapse}
           aria-label={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
@@ -381,13 +390,16 @@ export default function Sidebar() {
             {!isCollapsed && <span>Account</span>}
           </Link>
           <button
+            type="button"
             className="sidebar-logout"
+            suppressHydrationWarning
             onClick={() => {
               localStorage.removeItem("acu_session");
               localStorage.removeItem("userName");
               localStorage.removeItem("userFirstName");
               localStorage.removeItem("userLastName");
               localStorage.removeItem("userRole");
+              localStorage.removeItem("userAllBranches");
               localStorage.removeItem("authType");
               localStorage.removeItem("activeCompanyId");
 

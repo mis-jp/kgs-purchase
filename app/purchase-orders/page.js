@@ -6,7 +6,8 @@ import { withBasePath } from "@/lib/base-path";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import { calcTotalCbm, formatCbm } from "@/lib/item-dimensions";
-import { isLocalAdminUser } from "@/lib/user-access-client";
+import { loadAllBranchesAccess } from "@/lib/user-access-client";
+import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
@@ -115,6 +116,20 @@ function isoToYmd(d) {
     if (!key) return "";
     const [y, m, day] = key.split("-");
     return `${y}/${m}/${day}`;
+}
+
+function orderBranchLabel(order) {
+    const ids = [];
+    const seen = new Set();
+    for (const line of order?.lines || []) {
+        const id = String(line?.branchId || line?.warehouseId || "").trim();
+        if (!id) continue;
+        const key = id.toUpperCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        ids.push(id);
+    }
+    return ids.join(", ");
 }
 
 function fmtDate(d) {
@@ -367,6 +382,7 @@ const EMPTY_COLUMN_FILTERS = {
     vendorName: "",
     origin: "",
     status: "",
+    branch: "",
     containerNumber: "",
     date: "",
     etd: "",
@@ -379,6 +395,7 @@ const EMPTY_COLUMN_FILTERS = {
 };
 
 const COLUMN_FILTER_META = [
+    { key: "branch", label: "Branch" },
     { key: "orderNbr", label: "Order #" },
     { key: "vendorId", label: "Vendor ID" },
     { key: "vendorName", label: "Vendor Name" },
@@ -410,7 +427,7 @@ const PO_STATUS_FILTER_OPTIONS = [
 function normalizePoStatus(status) {
     const s = String(status || "").trim();
     if (!s) return "";
-    if (s.toLowerCase() === "hold") return "On Hold";
+    if (["hold", "on hold", "onhold", "h"].includes(s.toLowerCase())) return "On Hold";
     if (s.toLowerCase() === "canceled") return "Cancelled";
     return s;
 }
@@ -698,6 +715,7 @@ function UserStatusGuidePanel({ activeTab, onTabChange, onFilterTable, tableFilt
                         aria-selected={activeTab === opt}
                         className={`po-status-guide-chip ${activeTab === opt ? "active" : ""} ${tableFilter === opt ? "filtering" : ""}`}
                         onClick={() => onTabChange(opt)}
+                        suppressHydrationWarning
                     >
                         {opt}
                     </button>
@@ -723,6 +741,7 @@ function UserStatusGuidePanel({ activeTab, onTabChange, onFilterTable, tableFilt
                     type="button"
                     className={`po-status-filter-table-btn ${isFiltering ? "active" : ""}`}
                     onClick={() => onFilterTable?.(isFiltering ? "" : activeTab)}
+                    suppressHydrationWarning
                 >
                     {isFiltering ? `Clear “${activeTab}” filter` : `Show “${activeTab}” in table`}
                 </button>
@@ -783,6 +802,7 @@ export default function PurchaseOrdersPage() {
     const [endDate, setEndDate] = useState(() => todayIso());
     const [status, setStatus] = useState("active");
     const [selectedBranch, setSelectedBranch] = useState("");
+    const [allowAllBranches, setAllowAllBranches] = useState(false);
     const [branchOptions, setBranchOptions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -902,7 +922,9 @@ export default function PurchaseOrdersPage() {
                         return { id: b.SiteID || b.branch_id || "", name };
                     }).filter((b) => b.id);
                     setBranchOptions(options);
-                    if (!isLocalAdminUser() && options[0] && !options.some((b) => b.id === selectedBranch)) {
+                    const allowAll = await loadAllBranchesAccess(fetchWithAuth);
+                    if (active) setAllowAllBranches(allowAll);
+                    if (!allowAll && options[0] && !options.some((b) => b.id === selectedBranch)) {
                         setSelectedBranch(options[0].id);
                     }
                 }
@@ -1057,6 +1079,7 @@ export default function PurchaseOrdersPage() {
         debColumnFilters.vendorId,
         debColumnFilters.vendorName,
         debColumnFilters.status,
+        debColumnFilters.branch,
         debColumnFilters.date,
         debColumnFilters.origin,
         debColumnFilters.containerNumber,
@@ -1104,6 +1127,7 @@ export default function PurchaseOrdersPage() {
             // Annotation / logistics filters still need a wider page so client filter is not stuck on 10 rows
             const hasClientOnlyColumnFilters = !!(
                 col.origin
+                || col.branch
                 || col.containerNumber
                 || col.etd
                 || col.shipOutDate
@@ -1148,7 +1172,8 @@ export default function PurchaseOrdersPage() {
             const toolbarQ = String(debSearch || "").trim();
             let searchQ = toolbarQ;
             if (orderNbrQ) {
-                searchQ = orderNbrQ;
+                params.set("orderNbr", orderNbrQ);
+                searchQ = "";
             } else if (vendorNameQ) {
                 // Column Vendor Name must hit the API (not only the current page of 10)
                 searchQ = vendorNameQ;
@@ -1212,6 +1237,55 @@ export default function PurchaseOrdersPage() {
         fetchOrders();
     }, [fetchOrders]);
 
+    useEffect(() => {
+        let wasRunning = false;
+        let timer = null;
+        const stop = subscribeAutoSyncStatus((detail) => {
+            if (detail?.running) {
+                wasRunning = true;
+                return;
+            }
+            if (!wasRunning) return;
+            wasRunning = false;
+            clearTimeout(timer);
+            timer = setTimeout(() => fetchOrders(), 500);
+        });
+        return () => {
+            clearTimeout(timer);
+            stop();
+        };
+    }, [fetchOrders]);
+
+    const fetchOrdersRef = useRef(fetchOrders);
+    fetchOrdersRef.current = fetchOrders;
+
+    useEffect(() => {
+        let cancelled = false;
+        let timer = null;
+        const pullFromAcumatica = async () => {
+            let more = true;
+            let guard = 0;
+            while (more && !cancelled && guard < 12) {
+                guard += 1;
+                try {
+                    const res = await fetchWithAuth("/api/po/live", { method: "POST" });
+                    if (!res.ok) break;
+                    const data = await res.json();
+                    if ((data.synced || 0) > 0 && !cancelled) fetchOrdersRef.current();
+                    more = Boolean(data.more);
+                } catch {
+                    break;
+                }
+            }
+            if (!cancelled) timer = setTimeout(pullFromAcumatica, 30000);
+        };
+        pullFromAcumatica();
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+        };
+    }, []);
+
     // Load packaging dimensions for line Total CBM
     useEffect(() => {
         const ids = [
@@ -1248,16 +1322,6 @@ export default function PurchaseOrdersPage() {
         return lineDimensions[id] || lineDimensions[id.toUpperCase()] || null;
     };
 
-    const summaryStats = useMemo(() => {
-        const totalValue = orders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
-        const pendingEtaCount = orders.filter(o => {
-            const ui = getPoUserInputs(userInputs, o.orderNbr, o.orderType);
-            return !hasAnyMultiValue(ui?.eta);
-        }).length;
-        const openCount = orders.filter(o => o.status === 'Open').length;
-        return { totalValue, pendingEtaCount, openCount };
-    }, [orders, userInputs]);
-
     const rangeDayCount = useMemo(
         () => inclusiveDayCount(startDate, endDate),
         [startDate, endDate]
@@ -1275,6 +1339,7 @@ export default function PurchaseOrdersPage() {
             const etdValue = o.promisedDate || ui.etd;
             if (f.origin && (ui.origin || "") !== f.origin) return false;
             if (f.status && normalizePoStatus(o.status).toLowerCase() !== normalizePoStatus(f.status).toLowerCase()) return false;
+            if (f.branch && !textIncludes(orderBranchLabel(o), f.branch)) return false;
             if (!multiTextIncludes(ui.containerNumber, f.containerNumber)) return false;
             if (f.date && toDateKey(o.date) !== f.date) return false;
             if (f.etd && toDateKey(etdValue) !== f.etd) return false;
@@ -1291,10 +1356,21 @@ export default function PurchaseOrdersPage() {
         });
     }, [orders, userInputs, columnFilters, overdueShipOutFilter, overdueShipOut.orderNbrs]);
 
+    const summaryStats = useMemo(() => {
+        const totalValue = displayedOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+        const pendingEtaCount = displayedOrders.filter(o => {
+            const ui = getPoUserInputs(userInputs, o.orderNbr, o.orderType);
+            return !hasAnyMultiValue(ui?.eta);
+        }).length;
+        const openCount = displayedOrders.filter(o => o.status === 'Open').length;
+        return { totalValue, pendingEtaCount, openCount };
+    }, [displayedOrders, userInputs]);
+
     const hasClientOnlyColumnFilters = useMemo(() => {
         const f = columnFilters;
         return !!(
             f.origin
+            || f.branch
             || f.containerNumber
             || f.etd
             || f.shipOutDate
@@ -1305,8 +1381,9 @@ export default function PurchaseOrdersPage() {
         );
     }, [columnFilters]);
 
-    // Footer must match visible rows — never show "626 orders" when the table is empty
-    const paginationTotal = hasClientOnlyColumnFilters
+    // Footer must match visible rows — never show a count when the table hid every row
+    const clientHidEveryRow = orders.length > 0 && displayedOrders.length === 0;
+    const paginationTotal = (hasClientOnlyColumnFilters || clientHidEveryRow)
         ? displayedOrders.length
         : (typeof totalCount === "number" ? totalCount : displayedOrders.length);
 
@@ -1454,7 +1531,7 @@ export default function PurchaseOrdersPage() {
                                 onChange={(e) => setSelectedBranch(e.target.value)}
                                 aria-label="Branch filter"
                             >
-                                {isLocalAdminUser() ? <option value="">All Branches</option> : null}
+                                {allowAllBranches ? <option value="">All Branches</option> : null}
                                 {branchOptions.map((b) => (
                                     <option key={b.id} value={b.id}>{b.id}</option>
                                 ))}
@@ -1500,6 +1577,7 @@ export default function PurchaseOrdersPage() {
                         <thead>
                             <tr className="po-head-labels">
                                 <th className="po-col-expand"></th>
+                                <PoColHeader label="Branch" className="po-col-branch" />
                                 <PoColHeader label="Order #" className="po-col-order" />
                                 <PoColHeader label="Vendor ID" className="po-col-vendor-id" />
                                 <PoColHeader label="Vendor Name" className="po-col-vendor-name" />
@@ -1517,6 +1595,13 @@ export default function PurchaseOrdersPage() {
                             </tr>
                             <tr className="po-head-filters">
                                 <th className="po-col-expand"></th>
+                                <ColumnFilterCell
+                                    filterKey="branch"
+                                    className="po-col-branch"
+                                    value={columnFilters.branch}
+                                    onChange={(v) => setColumnFilter("branch", v)}
+                                    placeholder="Branch…"
+                                />
                                 <ColumnFilterCell
                                     filterKey="orderNbr"
                                     className="po-col-order"
@@ -1622,14 +1707,14 @@ export default function PurchaseOrdersPage() {
                         </thead>
                         <tbody>
                             {loading && orders.length === 0 ? (
-                                <tr><td colSpan={15} className="si-loading-cell">
+                                <tr><td colSpan={16} className="si-loading-cell">
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '4rem 0' }}>
                                         <div className="db-spinner db-spinner-lg"></div>
                                         <span style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>Fetching orders...</span>
                                     </div>
                                 </td></tr>
                             ) : displayedOrders.length === 0 ? (
-                                <tr><td colSpan={15} className="si-empty-cell" style={{ padding: '4rem 0' }}>
+                                <tr><td colSpan={16} className="si-empty-cell" style={{ padding: '4rem 0' }}>
                                     {overdueShipOutFilter
                                         ? "No purchase orders are overdue on Ship Out (1 month with no Received date)."
                                         : columnFilters.userStatus
@@ -1652,6 +1737,11 @@ export default function PurchaseOrdersPage() {
                                             <td>
                                                 <span className={`po-expand-icon ${isOpen ? "po-expand-open" : ""}`}>
                                                     <IconChevronDown />
+                                                </span>
+                                            </td>
+                                            <td className="po-col-branch">
+                                                <span className="po-branch-cell" title={orderBranchLabel(po) || ""}>
+                                                    {orderBranchLabel(po) || "—"}
                                                 </span>
                                             </td>
                                             <td className="po-col-order">
@@ -1750,7 +1840,7 @@ export default function PurchaseOrdersPage() {
                                         </tr>
                                         {isOpen && (
                                             <tr className="po-lines-row">
-                                                <td colSpan={15}>
+                                                <td colSpan={16}>
                                                     <div className="po-lines-wrap">
                                                         <table className="po-lines-table">
                                                             <thead>

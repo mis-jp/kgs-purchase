@@ -103,6 +103,7 @@ function SignInContent() {
             const displayName = user?.fullName || user?.username || username;
             localStorage.setItem("userName", displayName);
             localStorage.setItem("userRole", user?.role || "user");
+            localStorage.setItem("userAllBranches", user?.role === "admin" || user?.allBranches ? "1" : "0");
             localStorage.setItem("authType", "local");
             localStorage.setItem("userModules", JSON.stringify(Array.isArray(user?.allowedModules) ? user.allowedModules : []));
             localStorage.removeItem("userFirstName");

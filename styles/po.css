@@ -729,6 +729,16 @@ select.po-select-box:focus {
 .po-col-vendor-name { width: 11%; min-width: 9rem; }
 .po-col-origin { width: 6.5%; min-width: 6.5rem; }
 .po-col-status { width: 5.5%; min-width: 4.75rem; }
+.po-col-branch { width: 6.5%; min-width: 5.5rem; }
+.po-branch-cell {
+    display: block;
+    max-width: 8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
 .po-col-container { width: 7.5%; min-width: 6.5rem; }
 .po-col-date { width: 6%; min-width: 6.25rem; }
 .po-col-etd { width: 6%; min-width: 6.25rem; }
@@ -1425,8 +1435,8 @@ input.po-select-box[type="date"] {
 
     .db-table.po-table,
     .po-table {
-        width: max(100%, 1180px);
-        min-width: 1180px;
+        width: max(100%, 1260px);
+        min-width: 1260px;
     }
 
     .po-col-order {

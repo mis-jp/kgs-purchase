@@ -87,19 +87,23 @@ export async function PATCH(request, { params }) {
                 normalizeModuleAccessInput(body.moduleAccess || body.allowedModules)
             );
         }
+        const grantAll = nextRole === "admin" || body.allBranches === true;
         const branchIds = body.branchIds !== undefined ? normalizeBranchIds(body.branchIds) : null;
-        if (nextRole === "user" && branchIds && !branchIds.length) {
+        if (nextRole === "user" && !grantAll && branchIds && !branchIds.length) {
             return NextResponse.json(
-                { message: "Select at least one branch for this user." },
+                { message: "Select at least one branch, or choose All branches." },
                 { status: 400 }
             );
         }
+        if (body.allBranches !== undefined || fields.role !== undefined) {
+            fields.allBranches = grantAll;
+        }
 
         await MySqlService.updateAppUser(id, fields);
-        if (branchIds || fields.role !== undefined) {
+        if (grantAll || branchIds || fields.role !== undefined) {
             await MySqlService.setAppUserBranches(
                 id,
-                nextRole === "admin" ? [] : (branchIds || await MySqlService.getAppUserBranchIds(id))
+                grantAll ? [] : (branchIds || await MySqlService.getAppUserBranchIds(id))
             );
         }
         const updated = await sanitizeUserWithBranches(await MySqlService.getAppUserById(id));
