@@ -2519,7 +2519,11 @@ export const MySqlService = {
             });
             const filtered = Boolean(search || classFilter || dimsFilter || cursorId);
             if (filtered || result.totalCount > 0) {
-                return { ...result, itemClasses: await itemClassesPromise };
+                const itemClasses = await itemClassesPromise.catch((err) => {
+                    console.warn("[MySQL stock item classes]", err.message);
+                    return [];
+                });
+                return { ...result, itemClasses };
             }
 
             // Legacy fallback: no catalog yet — list distinct IDs from warehouse rows
@@ -2740,31 +2744,44 @@ export const MySqlService = {
             const summarySqlParams = branch && branch !== "All Branches"
                 ? [branch, ...summaryParams]
                 : summaryParams;
-            const [[row]] = await pool.query({
-                sql: `SELECT
+            const [[row]] = await pool.query(
+                `SELECT
                     COUNT(*) AS total,
-                    COALESCE(SUM(${stockCase}), 0) AS overallStock,
-                    COALESCE(SUM(CASE WHEN ${dimFilledSql} THEN 1 ELSE 0 END), 0) AS dimsSetCount
+                    COALESCE(SUM(${stockCase}), 0) AS overallStock
                  FROM \`${INVENTORY_VIEW_TABLE}\` i
-                 LEFT JOIN item_dimensions d ON d.inventory_id = i.inventory_id
                  ${summaryWhere}`,
-                values: summarySqlParams,
-                timeout: 12000,
-            });
+                summarySqlParams
+            );
+            let dimsSet = 0;
+            try {
+                const [[dims]] = await pool.query(
+                    `SELECT COUNT(*) AS dimsSetCount
+                     FROM item_dimensions d
+                     INNER JOIN \`${INVENTORY_VIEW_TABLE}\` i
+                       ON i.inventory_id = d.inventory_id
+                      AND ${dimFilledSql}
+                     ${summaryWhere}`,
+                    summaryParams
+                );
+                dimsSet = Number(dims?.dimsSetCount) || 0;
+            } catch (err) {
+                console.warn("[MySQL stock items dims count]", err.message);
+            }
             const totalProducts = Number(row?.total) || 0;
-            const dimsSet = Number(row?.dimsSetCount) || 0;
             return {
                 overallStock: Number(row?.overallStock) || 0,
                 dimsSetCount: dimsSet,
                 dimsUnsetCount: Math.max(0, totalProducts - dimsSet),
                 unfilteredTotal: totalProducts,
             };
+        }).catch((err) => {
+            console.warn("[MySQL stock items summary]", err.message);
+            return { overallStock: 0, dimsSetCount: 0, dimsUnsetCount: 0, unfilteredTotal: 0 };
         });
 
-        const queryInventory = (sql, values) => pool.query({ sql, values, timeout: 12000 });
         const [[rows], [[{ total }]], summary] = await Promise.all([
-            queryInventory(query, pageParams),
-            queryInventory(
+            pool.query(query, pageParams),
+            pool.query(
                 `SELECT COUNT(*) AS total FROM \`${INVENTORY_VIEW_TABLE}\` i ${dimJoin} ${whereClause}`,
                 params
             ),

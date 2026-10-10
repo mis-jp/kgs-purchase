@@ -54,7 +54,7 @@ export async function GET(request) {
         return NextResponse.json({ ...result, source, companyId }, NO_STORE);
     } catch (err) {
         console.error("[Stock Items API MySQL Error]", err.message);
-        const dbDown = /ETIMEDOUT|ECONNRESET|ECONNREFUSED|PROTOCOL_SEQUENCE_TIMEOUT|ETIMEDOUT|QUERY_TIMEOUT|timeout/i.test(
+        const dbDown = /ETIMEDOUT|ECONNRESET|ECONNREFUSED|PROTOCOL_CONNECTION_LOST|EHOSTUNREACH|ENOTFOUND/i.test(
             `${err?.code || ""} ${err?.message || ""}`
         );
         if (dbDown) {
