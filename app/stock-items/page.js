@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import { withBasePath } from "@/lib/base-path";
-import { DIMENSION_FIELDS } from "@/lib/item-dimensions";
+import { DIMENSION_FIELDS, calcStockWeightKg, formatWeightKg } from "@/lib/item-dimensions";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
+import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 
@@ -190,9 +191,12 @@ export default function StockItemsPage() {
         setSelectedId(null);
     };
 
-    const fetchItems = useCallback(async () => {
-        setLoading(true);
-        setError(null);
+    const fetchItems = useCallback(async (opts = {}) => {
+        const silent = opts.silent === true;
+        if (!silent) {
+            setLoading(true);
+            setError(null);
+        }
         try {
             const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
             if (debouncedSearch) params.set("search", debouncedSearch);
@@ -216,14 +220,33 @@ export default function StockItemsPage() {
             }
         } catch (err) {
             if (err.message === "Unauthorized") return;
-            setError(err.message || "Failed to load stock items. Please try again.");
+            if (!silent) setError(err.message || "Failed to load stock items. Please try again.");
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [page, debouncedSearch, selectedItemClass, dimsStatus]);
 
     useEffect(() => {
         fetchItems();
+    }, [fetchItems]);
+
+    useEffect(() => {
+        let wasRunning = false;
+        let timer = null;
+        const stop = subscribeAutoSyncStatus((detail) => {
+            if (detail?.running) {
+                wasRunning = true;
+                return;
+            }
+            if (!wasRunning) return;
+            wasRunning = false;
+            clearTimeout(timer);
+            timer = setTimeout(() => fetchItems({ silent: true }), 500);
+        });
+        return () => {
+            clearTimeout(timer);
+            stop();
+        };
     }, [fetchItems]);
 
     const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -410,25 +433,47 @@ export default function StockItemsPage() {
                             </button>
                             {showImportInfo && (
                                 <div className="si-import-info-panel" role="dialog" aria-label="Import format guide">
-                                    <strong>Required file format</strong>
+                                    <strong>Import sheet format</strong>
                                     <p>
-                                        Upload an Excel (.xlsx, .xls) or CSV file with a header row. The
-                                        first column must match stock items by Inventory ID.
+                                        Use Excel (.xlsx, .xls) or CSV. The first row must be these headers. Each following row is one stock item.
                                     </p>
-                                    <ul>
-                                        <li>
-                                            <strong>Inventory ID</strong> — must match an existing stock
-                                            item
-                                        </li>
-                                        {DIMENSION_FIELDS.map((f) => (
-                                            <li key={f.key}>
-                                                <strong>{f.label}</strong> — optional numeric value
-                                            </li>
-                                        ))}
-                                    </ul>
+                                    <div className="si-import-example">
+                                        <div className="si-import-example-scroll">
+                                            <table className="si-import-example-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Inventory ID</th>
+                                                        {DIMENSION_FIELDS.map((f) => (
+                                                            <th key={f.key}>{f.label}</th>
+                                                        ))}
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr>
+                                                        <td>120201110006040</td>
+                                                        <td>20</td>
+                                                        <td>0.45</td>
+                                                        <td>0.32</td>
+                                                        <td>0.28</td>
+                                                        <td>8.5</td>
+                                                        <td>0.04032</td>
+                                                    </tr>
+                                                    <tr>
+                                                        <td>120201201061800</td>
+                                                        <td>12</td>
+                                                        <td>0.30</td>
+                                                        <td>0.20</td>
+                                                        <td>0.15</td>
+                                                        <td>3.2</td>
+                                                        <td></td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <p className="si-import-example-caption">Sample only. Replace the Inventory ID and numbers with your items.</p>
+                                    </div>
                                     <p className="si-import-info-note">
-                                        Unknown Inventory IDs are skipped. Existing dimension values are
-                                        not overwritten — only empty fields are filled.
+                                        Inventory ID must match an existing stock item. The other columns are numbers and can be left blank. Unknown IDs are skipped. A value already saved is kept — only empty fields are filled. KG is the weight of one unit. The Weight column multiplies that by the quantity on hand.
                                     </p>
                                 </div>
                             )}
@@ -500,6 +545,7 @@ export default function StockItemsPage() {
                                     <th className="si-col-num">MOQ</th>
                                     <th className="si-col-num">Price</th>
                                     <th className="si-col-unit">Unit</th>
+                                    <th className="si-col-weight">Weight</th>
                                     <th className="si-col-status">Status</th>
                                     <th className="si-col-dim">Dims</th>
                                     <th className="si-col-action">
@@ -510,7 +556,7 @@ export default function StockItemsPage() {
                             <tbody>
                                 {loading && items.length === 0 ? (
                                     <tr>
-                                        <td colSpan={9} className="si-loading-cell">
+                                        <td colSpan={10} className="si-loading-cell">
                                             <div className="si-empty-state">
                                                 <div className="db-spinner db-spinner-lg" />
                                                 <span>Fetching items…</span>
@@ -519,7 +565,7 @@ export default function StockItemsPage() {
                                     </tr>
                                 ) : items.length === 0 ? (
                                     <tr>
-                                        <td colSpan={9} className="si-empty-cell">
+                                        <td colSpan={10} className="si-empty-cell">
                                             <div className="si-empty-state">
                                                 <strong>No matching items</strong>
                                                 <span>Try a different search term or clear filters.</span>
@@ -570,6 +616,30 @@ export default function StockItemsPage() {
                                                 </td>
                                                 <td className="si-col-unit">
                                                     {item.baseUnit || <span className="si-muted">—</span>}
+                                                </td>
+                                                <td className="si-col-weight">
+                                                    {item.weightKg == null || !Number.isFinite(Number(item.weightKg)) ? (
+                                                        <span className="si-muted" title="Set Box KG on the item">—</span>
+                                                    ) : onHand > 0 ? (
+                                                        <span
+                                                            className="si-weight-stack"
+                                                            title={`On-hand weight. ${formatWeightKg(item.weightKg)} kg × ${onHand.toLocaleString()} on hand.`}
+                                                        >
+                                                            <span className="si-weight">
+                                                                {formatWeightKg(calcStockWeightKg({
+                                                                    weight_kg: item.weightKg,
+                                                                    pcs_per_box: item.pcsPerBox,
+                                                                    qty: onHand,
+                                                                }))} kg
+                                                            </span>
+                                                            <span className="si-weight-note">on hand</span>
+                                                        </span>
+                                                    ) : (
+                                                        <span className="si-weight-stack" title="Carton weight. On-hand weight shows when this item has stock.">
+                                                            <span className="si-weight">{formatWeightKg(item.weightKg)} kg</span>
+                                                            <span className="si-weight-note">box</span>
+                                                        </span>
+                                                    )}
                                                 </td>
                                                 <td className="si-col-status">
                                                     <div className="si-status-stack">
@@ -631,7 +701,19 @@ export default function StockItemsPage() {
             </main>
 
             {selectedId && (
-                <InventoryDetailModal inventoryId={selectedId} onClose={() => setSelectedId(null)} />
+                <InventoryDetailModal
+                    inventoryId={selectedId}
+                    onClose={() => setSelectedId(null)}
+                    onDimensionsSaved={(dims) => {
+                        const weightKg = dims?.weight_kg != null && dims.weight_kg !== "" ? Number(dims.weight_kg) : null;
+                        const pcsPerBox = dims?.pcs_per_box != null && dims.pcs_per_box !== "" ? Number(dims.pcs_per_box) : null;
+                        setItems((prev) => prev.map((item) => (
+                            item.inventoryId === selectedId
+                                ? { ...item, weightKg, pcsPerBox, hasDimensions: true }
+                                : item
+                        )));
+                    }}
+                />
             )}
         </div>
     );

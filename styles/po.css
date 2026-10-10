@@ -28,7 +28,7 @@
 
 .po-page-title-row {
     display: grid;
-    grid-template-columns: minmax(180px, 0.7fr) minmax(240px, 0.9fr) minmax(320px, 1.3fr);
+    grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr);
     align-items: start;
     gap: 1.25rem 1.5rem;
     container-type: inline-size;
@@ -125,6 +125,20 @@
 
 .po-shipout-overdue-panel.is-alert .po-shipout-overdue-value {
     color: var(--status-warning, #f59e0b);
+}
+
+.po-etd-beyond-panel.is-alert {
+    border-color: rgba(225, 29, 72, 0.4);
+    box-shadow: 0 0 0 1px rgba(225, 29, 72, 0.1);
+}
+
+.po-etd-beyond-panel .po-shipout-overdue-icon {
+    background: rgba(225, 29, 72, 0.12);
+    color: var(--status-danger, #e11d48);
+}
+
+.po-etd-beyond-panel.is-alert .po-shipout-overdue-value {
+    color: var(--status-danger, #e11d48);
 }
 
 .po-shipout-overdue-label {
@@ -295,9 +309,29 @@
     border-color: var(--border-dark);
 }
 
+@container po-title (max-width: 1180px) {
+    .po-page-title-row {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .po-page-title-text {
+        grid-column: 1 / -1;
+    }
+}
+
 @container po-title (max-width: 760px) {
     .po-page-title-row {
         grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 1180px) {
+    .po-page-title-row {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .po-page-title-text {
+        grid-column: 1 / -1;
     }
 }
 
@@ -848,6 +882,11 @@ select.po-select-box:focus {
     height: 12px;
 }
 
+.po-user-status-td .po-multi-entry-row .po-user-status-select {
+    height: 32px;
+    min-height: 32px;
+}
+
 .po-user-status-select,
 .po-origin-select {
     width: 100%;
@@ -886,11 +925,45 @@ select.po-select-box:focus {
     padding: 0.3rem 0.5rem;
 }
 
+.po-table td.po-user-status-td,
+.po-table td.po-amount-td {
+    vertical-align: top;
+    height: 1px;
+}
+
+.po-amount-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.45rem;
+    height: 100%;
+    min-height: 100%;
+}
+
 .po-amount-cell {
     color: var(--text-primary);
     font-size: 0.68rem;
     font-weight: 800;
     white-space: nowrap;
+}
+
+.po-add-row-btn {
+    border: 1px dashed var(--border-medium);
+    background: transparent;
+    color: var(--accent-primary, #2563eb);
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1.2;
+    cursor: pointer;
+    padding: 0.4rem 0.55rem;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+
+.po-add-row-btn:hover {
+    border-color: var(--accent-primary, #2563eb);
+    background: rgba(59, 130, 246, 0.1);
 }
 
 /* Year-first date inputs (yyyy/mm/dd) */

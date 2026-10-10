@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 function IconFirst() {
     return (
@@ -106,11 +106,26 @@ export default function PaginationBar({
         [knownTotal, safePage, totalPages]
     );
 
+    const [pageDraft, setPageDraft] = useState(String(safePage));
+    useEffect(() => {
+        setPageDraft(String(safePage));
+    }, [safePage]);
+
     const go = (n) => {
         if (disabled || typeof onPageChange !== "function") return;
         const next = Math.max(1, n);
         if (knownTotal) onPageChange(Math.min(totalPages, next));
         else onPageChange(next);
+    };
+
+    const commitPageDraft = () => {
+        const n = parseInt(String(pageDraft).trim(), 10);
+        if (!Number.isFinite(n) || n < 1) {
+            setPageDraft(String(safePage));
+            return;
+        }
+        go(n);
+        if (knownTotal) setPageDraft(String(Math.min(totalPages, n)));
     };
 
     let info;
@@ -141,9 +156,35 @@ export default function PaginationBar({
         );
     }
 
+    const jumpDisabled = disabled || (knownTotal && total === 0);
+
     return (
         <nav className={`db-pagination${className ? ` ${className}` : ""}`} aria-label="Pagination">
-            <p className="db-page-info">{info}</p>
+            <div className="db-page-info-wrap">
+                <p className="db-page-info">{info}</p>
+                <label className="db-page-jump">
+                    <span>Page</span>
+                    <input
+                        type="number"
+                        className="db-page-jump-input"
+                        inputMode="numeric"
+                        min={1}
+                        max={knownTotal ? totalPages : undefined}
+                        value={pageDraft}
+                        disabled={jumpDisabled}
+                        aria-label="Page number to open"
+                        onChange={(e) => setPageDraft(e.target.value)}
+                        onBlur={commitPageDraft}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                                e.preventDefault();
+                                e.currentTarget.blur();
+                            }
+                        }}
+                    />
+                    {knownTotal ? <span>of {totalPages.toLocaleString()}</span> : null}
+                </label>
+            </div>
             <div className="db-page-btns" role="group" aria-label="Page navigation">
                 <button
                     type="button"

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
-import { DIMENSION_FIELDS, calcBoxCbm, formatCbm } from "@/lib/item-dimensions";
+import { DIMENSION_FIELDS, calcBoxCbm, calcPieceWeightKg, calcStockWeightKg, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
 import "@/styles/inventory-detail.css";
 
 const IconClose = () => (
@@ -227,6 +227,18 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
         () => calcBoxCbm(dimensions.length_m, dimensions.height_m, dimensions.width_m),
         [dimensions.length_m, dimensions.height_m, dimensions.width_m]
     );
+    const pieceKg = useMemo(
+        () => calcPieceWeightKg(dimensions.weight_kg, dimensions.pcs_per_box),
+        [dimensions.weight_kg, dimensions.pcs_per_box]
+    );
+    const onHandKg = useMemo(
+        () => calcStockWeightKg({
+            weight_kg: dimensions.weight_kg,
+            pcs_per_box: dimensions.pcs_per_box,
+            qty: detail?.totalOnHand,
+        }),
+        [dimensions.weight_kg, dimensions.pcs_per_box, detail?.totalOnHand]
+    );
 
     if (!inventoryId) return null;
 
@@ -346,7 +358,7 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
                             <h3 className="idm-section-title">Packaging Dimensions</h3>
                             <p className="idm-dim-hint">
                                 Per-box measurements for this item (stored in this app only).
-                                CBM is auto-calculated as L × H × W.
+                                CBM is L × H × W. On-hand weight is Box KG × the quantity on hand.
                             </p>
                             <div className="idm-dim-grid">
                                 {DIMENSION_FIELDS.map(({ key, label, step }) => {
@@ -354,10 +366,11 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
                                     const displayValue = isCbm
                                         ? (autoCbm != null ? formatCbm(autoCbm, 4) : (dimensions[key] ?? ""))
                                         : (dimensions[key] ?? "");
+                                    const fieldLabel = key === "weight_kg" ? "Box KG" : label;
                                     return (
                                         <label key={key} className={`idm-dim-field${isCbm ? " idm-dim-field-calc" : ""}`}>
                                             <span className="idm-dim-label">
-                                                {label}
+                                                {fieldLabel}
                                                 {isCbm ? " (auto)" : ""}
                                             </span>
                                             <input
@@ -370,11 +383,41 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
                                                 placeholder="—"
                                                 readOnly={isCbm}
                                                 tabIndex={isCbm ? -1 : undefined}
-                                                title={isCbm ? "Calculated from L × H × W" : undefined}
+                                                title={
+                                                    isCbm
+                                                        ? "Calculated from L × H × W"
+                                                        : key === "weight_kg"
+                                                            ? "Weight of one carton"
+                                                            : undefined
+                                                }
                                             />
                                         </label>
                                     );
                                 })}
+                                <label className="idm-dim-field idm-dim-field-calc">
+                                    <span className="idm-dim-label">Piece KG (auto)</span>
+                                    <input
+                                        type="text"
+                                        className="idm-dim-input"
+                                        value={pieceKg == null ? "" : formatWeightKg(pieceKg)}
+                                        readOnly
+                                        tabIndex={-1}
+                                        placeholder="—"
+                                        title="Box KG divided by pieces per box"
+                                    />
+                                </label>
+                                <label className="idm-dim-field idm-dim-field-calc">
+                                    <span className="idm-dim-label">On-hand KG (auto)</span>
+                                    <input
+                                        type="text"
+                                        className="idm-dim-input"
+                                        value={onHandKg == null ? "" : formatWeightKg(onHandKg)}
+                                        readOnly
+                                        tabIndex={-1}
+                                        placeholder="—"
+                                        title="Box KG multiplied by the quantity on hand"
+                                    />
+                                </label>
                             </div>
                             <div className="idm-dim-actions">
                                 <span className="idm-dim-saved" aria-live="polite">

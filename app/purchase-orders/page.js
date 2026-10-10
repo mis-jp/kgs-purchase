@@ -2,7 +2,6 @@
 
 import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
-import { withBasePath } from "@/lib/base-path";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import { calcTotalCbm, formatCbm } from "@/lib/item-dimensions";
@@ -186,7 +185,7 @@ function textIncludes(haystack, needle) {
 }
 
 /** Logistics fields stored as JSON arrays (legacy single strings still parse). */
-const LOGISTICS_MULTI_FIELDS = ["containerNumber", "shipOutDate", "eta", "receivedDate", "remarks"];
+const LOGISTICS_MULTI_FIELDS = ["containerNumber", "shipOutDate", "eta", "receivedDate", "remarks", "userStatus"];
 
 function parseMultiValue(raw) {
     if (raw == null || raw === "") return [""];
@@ -253,6 +252,11 @@ function isOpenArrivalUserStatus(userStatus) {
     return s !== "arrived" && s !== "cancelled" && s !== "canceled";
 }
 
+function userStatusList(raw) {
+    const list = parseMultiValue(raw).map((v) => String(v || "").trim() || "Pending");
+    return list.length ? list : ["Pending"];
+}
+
 /**
  * Ship-out slots that reached +1 month and still have no Received date.
  * Example: ship out Jul 22 appears on the dashboard from Aug 22 onward.
@@ -267,10 +271,10 @@ function collectOverdueShipOuts(userInputs, asOf = todayIso()) {
         if (!nbr || seen.has(nbr)) continue;
         seen.add(nbr);
         const ui = getPoUserInputs(userInputs, nbr);
-        if (!isOpenArrivalUserStatus(ui?.userStatus)) continue;
         const logistics = getLogisticsEntries(ui);
         let hit = false;
         for (let i = 0; i < logistics.shipOutDate.length; i++) {
+            if (!isOpenArrivalUserStatus(logistics.userStatus[i])) continue;
             const ship = toDateKey(logistics.shipOutDate[i]);
             if (!ship) continue;
             if (String(logistics.receivedDate[i] || "").trim()) continue;
@@ -283,6 +287,52 @@ function collectOverdueShipOuts(userInputs, asOf = todayIso()) {
         if (hit) orderNbrs.push(nbr);
     }
     return { orderNbrs, shipmentCount };
+}
+
+/**
+ * Packing list: a container slot whose ETD (Promised On) is already past
+ * and that slot still has no Received date.
+ */
+function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf = todayIso()) {
+    const today = toDateKey(asOf) || todayIso();
+    const seen = new Set();
+    const orderNbrs = [];
+    let containerCount = 0;
+    for (const refId of Object.keys(userInputs || {})) {
+        const nbr = orderNbrFromAnnotationRef(refId) || poAnnotationKey(refId);
+        if (!nbr || seen.has(nbr)) continue;
+        seen.add(nbr);
+        const ui = getPoUserInputs(userInputs, nbr);
+        const logistics = getLogisticsEntries(ui, receiptByOrder?.[nbr]);
+        const etd = toDateKey(etdByOrder?.[nbr] || ui?.etd);
+        if (!etd || etd >= today) continue;
+        let hit = false;
+        for (let i = 0; i < logistics.containerNumber.length; i++) {
+            if (!isOpenArrivalUserStatus(logistics.userStatus[i])) continue;
+            if (!String(logistics.containerNumber[i] || "").trim()) continue;
+            if (String(logistics.receivedDate[i] || "").trim()) continue;
+            containerCount += 1;
+            hit = true;
+        }
+        if (hit) orderNbrs.push(nbr);
+    }
+    return { orderNbrs, containerCount };
+}
+
+/** Order numbers that have at least one container number (packing list). */
+function collectContainerOrderNbrs(userInputs) {
+    const seen = new Set();
+    const orderNbrs = [];
+    for (const refId of Object.keys(userInputs || {})) {
+        const nbr = orderNbrFromAnnotationRef(refId) || poAnnotationKey(refId);
+        if (!nbr || seen.has(nbr)) continue;
+        seen.add(nbr);
+        const ui = getPoUserInputs(userInputs, nbr);
+        const logistics = getLogisticsEntries(ui);
+        if (logistics.containerNumber.some((c) => String(c || "").trim())) orderNbrs.push(nbr);
+    }
+    orderNbrs.sort();
+    return orderNbrs;
 }
 
 /** Aligned multi-entry slots for container / ship out / ETA / received / remarks. */
@@ -368,7 +418,10 @@ function collectOrderNbrsByUserStatus(userInputs, status) {
     if (!status) return null;
     const nbrs = new Set();
     for (const [refId, fields] of Object.entries(userInputs || {})) {
-        if ((fields?.userStatus || "Pending") === status) {
+        const statuses = fields?.userStatus == null || fields.userStatus === ""
+            ? ["Pending"]
+            : userStatusList(fields.userStatus);
+        if (statuses.includes(status)) {
             const nbr = orderNbrFromAnnotationRef(refId);
             if (nbr) nbrs.add(nbr);
         }
@@ -430,6 +483,47 @@ function normalizePoStatus(status) {
     if (["hold", "on hold", "onhold", "h"].includes(s.toLowerCase())) return "On Hold";
     if (s.toLowerCase() === "canceled") return "Cancelled";
     return s;
+}
+
+function poRowMatchesFilters(o, {
+    columnFilters: f,
+    userInputs,
+    overdueShipOutFilter,
+    overdueNbrs,
+    etdBeyondFilter,
+    etdNbrs,
+}) {
+    const ui = getPoUserInputs(userInputs, o.orderNbr, o.orderType);
+    const etdValue = o.promisedDate || ui.etd;
+    if (!textIncludes(o.orderNbr, f.orderNbr)) return false;
+    if (!textIncludes(o.vendorId, f.vendorId)) return false;
+    if (!textIncludes(o.vendorName, f.vendorName)) return false;
+    if (f.origin && (ui.origin || "") !== f.origin) return false;
+    if (f.status && normalizePoStatus(o.status).toLowerCase() !== normalizePoStatus(f.status).toLowerCase()) return false;
+    if (f.branch && !textIncludes(orderBranchLabel(o), f.branch)) return false;
+    if (!multiTextIncludes(ui.containerNumber, f.containerNumber)) return false;
+    if (f.date && toDateKey(o.date) !== f.date) return false;
+    if (f.etd && toDateKey(etdValue) !== f.etd) return false;
+    if (!multiDateMatches(ui.shipOutDate, f.shipOutDate)) return false;
+    if (!multiDateMatches(ui.eta, f.eta)) return false;
+    if (!multiDateMatches(ui.receivedDate, f.receivedDate, o.receiptDate)) return false;
+    if (!multiTextIncludes(ui.remarks, f.remarks)) return false;
+    if (f.userStatus && !userStatusList(ui.userStatus).includes(f.userStatus)) return false;
+    if (overdueShipOutFilter && !overdueNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
+    if (etdBeyondFilter && !etdNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
+    if (f.totalAmount && !textIncludes(String(o.totalAmount ?? ""), f.totalAmount)
+        && !textIncludes(fmt(o.totalAmount), f.totalAmount)) return false;
+    return true;
+}
+
+function csvCell(value) {
+    return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function csvDate(value) {
+    if (!value) return "";
+    const key = toDateKey(value);
+    return key || String(value).split("T")[0];
 }
 
 /** ERP status from Acumatica — display only (not editable). */
@@ -791,6 +885,48 @@ function ShipOutOverduePanel({ shipmentCount, orderCount, filtering, onToggleFil
     );
 }
 
+function EtdBeyondContainerPanel({ containerCount, orderCount, filtering, onToggleFilter }) {
+    const hasBeyond = containerCount > 0;
+    return (
+        <section
+            className={`po-shipout-overdue-panel po-etd-beyond-panel ${hasBeyond ? "is-alert" : ""} ${filtering ? "is-filtering" : ""}`}
+            aria-labelledby="po-etd-beyond-title"
+        >
+            <div className="po-shipout-overdue-head">
+                <div className="po-shipout-overdue-icon" aria-hidden="true">
+                    <IconAlert />
+                </div>
+                <div>
+                    <h2 id="po-etd-beyond-title">ETD Beyond the Container</h2>
+                    <p>Packing list containers past their ETD.</p>
+                </div>
+            </div>
+            <div className="po-shipout-overdue-stats">
+                <div className="po-shipout-overdue-stat">
+                    <span className="po-shipout-overdue-value">{containerCount}</span>
+                    <span className="po-shipout-overdue-label">Containers past ETD</span>
+                </div>
+                <div className="po-shipout-overdue-stat">
+                    <span className="po-shipout-overdue-value">{orderCount}</span>
+                    <span className="po-shipout-overdue-label">Purchase orders</span>
+                </div>
+            </div>
+            <p className="po-shipout-overdue-hint">
+                A container is counted when it has a container number, the ETD date is already past, and Received is still empty.
+            </p>
+            <button
+                type="button"
+                className={`po-status-filter-table-btn ${filtering ? "active" : ""}`}
+                onClick={onToggleFilter}
+                disabled={!hasBeyond && !filtering}
+                suppressHydrationWarning
+            >
+                {filtering ? "Clear packing list filter" : "Show in table"}
+            </button>
+        </section>
+    );
+}
+
 export default function PurchaseOrdersPage() {
     const [orders, setOrders] = useState([]);
     const [page, setPage] = useState(1);
@@ -813,6 +949,9 @@ export default function PurchaseOrdersPage() {
     const [statusGuideTab, setStatusGuideTab] = useState(USER_STATUS_OPTIONS[0]);
     const [userStatusTableFilter, setUserStatusTableFilter] = useState("");
     const [overdueShipOutFilter, setOverdueShipOutFilter] = useState(false);
+    const [etdBeyondFilter, setEtdBeyondFilter] = useState(false);
+    const [etdByOrder, setEtdByOrder] = useState({});
+    const [receiptByOrder, setReceiptByOrder] = useState({});
     const [columnFilters, setColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [debColumnFilters, setDebColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [exporting, setExporting] = useState(false);
@@ -847,17 +986,6 @@ export default function PurchaseOrdersPage() {
         () => COLUMN_FILTER_META.filter((col) => columnFilters[col.key]),
         [columnFilters]
     );
-
-    const handleExport = async () => {
-        setExporting(true);
-        try {
-            window.location.href = withBasePath("/api/export?type=po");
-        } catch (e) {
-            console.error("Export failed", e);
-        } finally {
-            setTimeout(() => setExporting(false), 2000);
-        }
-    };
 
     const isInitialMount = useRef(true);
     const saveTimeoutRef = useRef({}); // key -> timeout
@@ -1075,6 +1203,7 @@ export default function PurchaseOrdersPage() {
         selectedBranch,
         columnFilters.userStatus,
         overdueShipOutFilter,
+        etdBeyondFilter,
         debColumnFilters.orderNbr,
         debColumnFilters.vendorId,
         debColumnFilters.vendorName,
@@ -1101,6 +1230,49 @@ export default function PurchaseOrdersPage() {
         [userInputs]
     );
 
+    const containerOrderKey = useMemo(
+        () => collectContainerOrderNbrs(userInputs).join("|"),
+        [userInputs]
+    );
+
+    const etdBeyond = useMemo(
+        () => collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder),
+        [userInputs, etdByOrder, receiptByOrder]
+    );
+
+    useEffect(() => {
+        const orderNbrs = containerOrderKey ? containerOrderKey.split("|") : [];
+        if (!orderNbrs.length) return undefined;
+        let active = true;
+        (async () => {
+            try {
+                const res = await fetchWithAuth("/api/po/container-etd", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ orderNbrs }),
+                });
+                if (!res.ok || !active) return;
+                const data = await res.json();
+                if (!active) return;
+                const nextEtd = {};
+                const nextReceipt = {};
+                for (const [nbr, raw] of Object.entries(data.dates || {})) {
+                    const etd = toDateKey(raw?.etd);
+                    const receipt = toDateKey(raw?.receipt);
+                    if (etd) nextEtd[nbr] = etd;
+                    if (receipt) nextReceipt[nbr] = receipt;
+                }
+                setEtdByOrder((prev) => ({ ...prev, ...nextEtd }));
+                setReceiptByOrder((prev) => ({ ...prev, ...nextReceipt }));
+            } catch (err) {
+                console.error("Failed to load container ETD dates", err);
+            }
+        })();
+        return () => {
+            active = false;
+        };
+    }, [containerOrderKey]);
+
     const fetchOrders = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -1112,10 +1284,17 @@ export default function PurchaseOrdersPage() {
                 return;
             }
 
-            let overdueNbrs = null;
-            if (overdueShipOutFilter) {
-                overdueNbrs = overdueShipOut.orderNbrs;
-                if (!overdueNbrs.length) {
+            let dashboardNbrs = null;
+            if (overdueShipOutFilter || etdBeyondFilter) {
+                const lists = [];
+                if (overdueShipOutFilter) lists.push(overdueShipOut.orderNbrs);
+                if (etdBeyondFilter) lists.push(etdBeyond.orderNbrs);
+                dashboardNbrs = lists.reduce((acc, list) => {
+                    if (!acc) return list;
+                    const allow = new Set(list);
+                    return acc.filter((n) => allow.has(n));
+                }, null);
+                if (!dashboardNbrs.length) {
                     setOrders([]);
                     setHasMore(false);
                     setTotalCount(0);
@@ -1144,7 +1323,7 @@ export default function PurchaseOrdersPage() {
             });
 
             // PO Date column filter narrows the range; otherwise use toolbar From/To
-            if (!overdueShipOutFilter) {
+            if (!overdueShipOutFilter && !etdBeyondFilter) {
                 if (col.date) {
                     params.set("startDate", col.date);
                     params.set("endDate", col.date);
@@ -1157,7 +1336,7 @@ export default function PurchaseOrdersPage() {
             // Column Status overrides toolbar Status when set.
             // A vendor-name search must still find that vendor when every matching
             // order is Closed. The Active toolbar would otherwise hide them.
-            if (!columnFilters.userStatus && !overdueShipOutFilter) {
+            if (!columnFilters.userStatus && !overdueShipOutFilter && !etdBeyondFilter) {
                 const typedVendor = String(col.vendorName || "").trim();
                 const toolbarText = String(debSearch || "").trim();
                 const toolbarIsOrder = /^[A-Za-z]{1,8}\d{4,}$/.test(toolbarText.replace(/\s+/g, ""));
@@ -1189,8 +1368,8 @@ export default function PurchaseOrdersPage() {
             if (columnFilters.userStatus && userStatusOrderNbrs?.length) {
                 nbrs = userStatusOrderNbrs;
             }
-            if (overdueNbrs) {
-                nbrs = nbrs ? nbrs.filter((n) => overdueNbrs.includes(n)) : overdueNbrs;
+            if (dashboardNbrs) {
+                nbrs = nbrs ? nbrs.filter((n) => dashboardNbrs.includes(n)) : dashboardNbrs;
                 if (!nbrs.length) {
                     setOrders([]);
                     setHasMore(false);
@@ -1230,6 +1409,8 @@ export default function PurchaseOrdersPage() {
         userStatusOrderNbrs,
         overdueShipOutFilter,
         overdueShipOut.orderNbrs,
+        etdBeyondFilter,
+        etdBeyond.orderNbrs,
         debColumnFilters,
     ]);
 
@@ -1328,33 +1509,158 @@ export default function PurchaseOrdersPage() {
     );
 
     const displayedOrders = useMemo(() => {
-        const f = columnFilters;
-        return orders.filter((o) => {
-            const ui = getPoUserInputs(userInputs, o.orderNbr, o.orderType);
+        return orders.filter((o) => poRowMatchesFilters(o, {
+            columnFilters,
+            userInputs,
+            overdueShipOutFilter,
+            overdueNbrs: overdueShipOut.orderNbrs,
+            etdBeyondFilter,
+            etdNbrs: etdBeyond.orderNbrs,
+        }));
+    }, [orders, userInputs, columnFilters, overdueShipOutFilter, overdueShipOut.orderNbrs, etdBeyondFilter, etdBeyond.orderNbrs]);
 
-            if (!textIncludes(o.orderNbr, f.orderNbr)) return false;
-            if (!textIncludes(o.vendorId, f.vendorId)) return false;
-            if (!textIncludes(o.vendorName, f.vendorName)) return false;
-            // ETD from Acumatica PromisedOn; fall back to legacy annotation if sync is empty
-            const etdValue = o.promisedDate || ui.etd;
-            if (f.origin && (ui.origin || "") !== f.origin) return false;
-            if (f.status && normalizePoStatus(o.status).toLowerCase() !== normalizePoStatus(f.status).toLowerCase()) return false;
-            if (f.branch && !textIncludes(orderBranchLabel(o), f.branch)) return false;
-            if (!multiTextIncludes(ui.containerNumber, f.containerNumber)) return false;
-            if (f.date && toDateKey(o.date) !== f.date) return false;
-            if (f.etd && toDateKey(etdValue) !== f.etd) return false;
-            if (!multiDateMatches(ui.shipOutDate, f.shipOutDate)) return false;
-            if (!multiDateMatches(ui.eta, f.eta)) return false;
-            if (!multiDateMatches(ui.receivedDate, f.receivedDate, o.receiptDate)) return false;
-            if (!multiTextIncludes(ui.remarks, f.remarks)) return false;
-            // userStatus is applied server-side via orderNbrs; keep a client check for safety
-            if (f.userStatus && (ui.userStatus || "Pending") !== f.userStatus) return false;
-            if (overdueShipOutFilter && !overdueShipOut.orderNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
-            if (f.totalAmount && !textIncludes(String(o.totalAmount ?? ""), f.totalAmount)
-                && !textIncludes(fmt(o.totalAmount), f.totalAmount)) return false;
-            return true;
-        });
-    }, [orders, userInputs, columnFilters, overdueShipOutFilter, overdueShipOut.orderNbrs]);
+    const handleExport = useCallback(async () => {
+        setExporting(true);
+        try {
+            const col = debColumnFilters;
+            const base = new URLSearchParams();
+
+            if (!overdueShipOutFilter && !etdBeyondFilter) {
+                if (col.date) {
+                    base.set("startDate", col.date);
+                    base.set("endDate", col.date);
+                } else {
+                    base.set("startDate", startDate);
+                    base.set("endDate", endDate);
+                }
+            }
+
+            if (!columnFilters.userStatus && !overdueShipOutFilter && !etdBeyondFilter) {
+                const typedVendor = String(col.vendorName || "").trim();
+                const toolbarText = String(debSearch || "").trim();
+                const toolbarIsOrder = /^[A-Za-z]{1,8}\d{4,}$/.test(toolbarText.replace(/\s+/g, ""));
+                const nameSearch = typedVendor || (toolbarText && !toolbarIsOrder ? toolbarText : "");
+                const effectiveStatus = String(col.status || (nameSearch ? "" : status) || "").trim();
+                if (effectiveStatus) base.set("status", effectiveStatus);
+            }
+
+            const orderNbrQ = String(col.orderNbr || "").trim();
+            const vendorNameQ = String(col.vendorName || "").trim();
+            const toolbarQ = String(debSearch || "").trim();
+            let searchQ = toolbarQ;
+            if (orderNbrQ) {
+                base.set("orderNbr", orderNbrQ);
+                searchQ = "";
+            } else if (vendorNameQ) {
+                searchQ = vendorNameQ;
+            }
+            if (searchQ) base.set("search", searchQ);
+
+            const vendorIdQ = String(col.vendorId || "").trim();
+            if (vendorIdQ) base.set("vendorId", vendorIdQ);
+            if (selectedBranch) base.set("branch", selectedBranch);
+
+            let nbrs = null;
+            if (columnFilters.userStatus && userStatusOrderNbrs?.length) {
+                nbrs = userStatusOrderNbrs;
+            }
+            if (overdueShipOutFilter || etdBeyondFilter) {
+                const lists = [];
+                if (overdueShipOutFilter) lists.push(overdueShipOut.orderNbrs);
+                if (etdBeyondFilter) lists.push(etdBeyond.orderNbrs);
+                const dashboardNbrs = lists.reduce((acc, list) => {
+                    if (!acc) return list;
+                    const allow = new Set(list);
+                    return acc.filter((n) => allow.has(n));
+                }, null);
+                nbrs = nbrs ? nbrs.filter((n) => dashboardNbrs.includes(n)) : dashboardNbrs;
+            }
+
+            const chunks = nbrs?.length
+                ? Array.from({ length: Math.ceil(nbrs.length / 80) }, (_, i) => nbrs.slice(i * 80, (i + 1) * 80))
+                : [null];
+            if (nbrs && nbrs.length === 0) {
+                chunks.length = 0;
+            }
+
+            const seen = new Set();
+            const all = [];
+            for (const chunkIds of chunks) {
+                let pageNum = 1;
+                let more = true;
+                while (more && pageNum <= 80) {
+                    const params = new URLSearchParams(base);
+                    params.set("page", String(pageNum));
+                    params.set("pageSize", "100");
+                    if (chunkIds) params.set("orderNbrs", chunkIds.join(","));
+                    const res = await fetchWithAuth(`/api/po?${params}`);
+                    if (!res.ok) {
+                        const body = await res.json().catch(() => ({}));
+                        throw new Error(body.message || `HTTP ${res.status}`);
+                    }
+                    const data = await res.json();
+                    for (const order of data.orders || []) {
+                        const key = String(order.orderNbr || "");
+                        if (!key || seen.has(key)) continue;
+                        seen.add(key);
+                        all.push(order);
+                    }
+                    more = Boolean(data.hasMore);
+                    pageNum += 1;
+                }
+            }
+
+            const rows = all.filter((order) => poRowMatchesFilters(order, {
+                columnFilters,
+                userInputs,
+                overdueShipOutFilter,
+                overdueNbrs: overdueShipOut.orderNbrs,
+                etdBeyondFilter,
+                etdNbrs: etdBeyond.orderNbrs,
+            }));
+
+            const lines = [
+                "Order Nbr,Vendor ID,Vendor Name,Status,PO Date,ETD,Received Date,Total Amount",
+                ...rows.map((po) => [
+                    csvCell(po.orderNbr),
+                    csvCell(po.vendorId),
+                    csvCell(po.vendorName),
+                    csvCell(po.status),
+                    csvDate(po.date),
+                    csvDate(po.promisedDate),
+                    csvDate(po.receiptDate),
+                    po.totalAmount ?? "",
+                ].join(",")),
+            ];
+            const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `PurchaseOrders_Export_${new Date().toISOString().split("T")[0]}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error("Export failed", e);
+        } finally {
+            setExporting(false);
+        }
+    }, [
+        debColumnFilters,
+        columnFilters,
+        debSearch,
+        startDate,
+        endDate,
+        status,
+        selectedBranch,
+        userStatusOrderNbrs,
+        overdueShipOutFilter,
+        overdueShipOut.orderNbrs,
+        etdBeyondFilter,
+        etdBeyond.orderNbrs,
+        userInputs,
+    ]);
 
     const summaryStats = useMemo(() => {
         const totalValue = displayedOrders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
@@ -1395,6 +1701,12 @@ export default function PurchaseOrdersPage() {
                         <h1>Purchase Orders</h1>
                         <p>View and manage all purchase orders live from Acumatica ERP.</p>
                     </div>
+                    <EtdBeyondContainerPanel
+                        containerCount={etdBeyond.containerCount}
+                        orderCount={etdBeyond.orderNbrs.length}
+                        filtering={etdBeyondFilter}
+                        onToggleFilter={() => setEtdBeyondFilter((v) => !v)}
+                    />
                     <ShipOutOverduePanel
                         shipmentCount={overdueShipOut.shipmentCount}
                         orderCount={overdueShipOut.orderNbrs.length}
@@ -1445,7 +1757,7 @@ export default function PurchaseOrdersPage() {
                             <IconInfo /> Module Guide
                         </h4>
                         <p className="po-info-text">
-                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking.
+                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container whose ETD has passed and still has no Received date.
                         </p>
                         <p className="po-info-text" style={{ marginTop: '0.75rem' }}>
                             Changes to Ship Out Date, ETA, Container #, Remarks, Origin, and User Status are saved to your account and backed up locally. Use the User Status Guide to review each status and filter the table.
@@ -1715,7 +2027,11 @@ export default function PurchaseOrdersPage() {
                                 </td></tr>
                             ) : displayedOrders.length === 0 ? (
                                 <tr><td colSpan={16} className="si-empty-cell" style={{ padding: '4rem 0' }}>
-                                    {overdueShipOutFilter
+                                    {etdBeyondFilter && overdueShipOutFilter
+                                        ? "No purchase orders match both dashboards."
+                                        : etdBeyondFilter
+                                        ? "No containers are past their ETD with an empty Received date."
+                                        : overdueShipOutFilter
                                         ? "No purchase orders are overdue on Ship Out (1 month with no Received date)."
                                         : columnFilters.userStatus
                                         ? `No orders currently set to User Status “${columnFilters.userStatus}”. Pick that status on a row first, then filter again — or choose All.`
@@ -1828,14 +2144,29 @@ export default function PurchaseOrdersPage() {
                                                     onRemove={onLogisticsRemove}
                                                 />
                                             </td>
-                                            <td onClick={(e) => e.stopPropagation()}>
-                                                <UserStatusCell
-                                                    value={ui.userStatus || ""}
-                                                    onChange={(val) => handleUserInput(key, "userStatus", val)}
-                                                />
+                                            <td className="po-multi-entry-td po-user-status-td" onClick={(e) => e.stopPropagation()}>
+                                                <div className="po-multi-entry">
+                                                    {logistics.userStatus.map((status, i) => (
+                                                        <div key={i} className="po-multi-entry-row">
+                                                            <UserStatusCell
+                                                                value={status || ""}
+                                                                onChange={(val) => handleLogisticsChange(key, "userStatus", i, val, po.receiptDate)}
+                                                            />
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </td>
-                                            <td style={{ textAlign: "right" }}>
-                                                <strong className="po-amount-cell">₱{fmt(po.totalAmount)}</strong>
+                                            <td className="po-amount-td" onClick={(e) => e.stopPropagation()}>
+                                                <div className="po-amount-stack">
+                                                    <strong className="po-amount-cell">₱{fmt(po.totalAmount)}</strong>
+                                                    <button
+                                                        type="button"
+                                                        className="po-add-row-btn"
+                                                        onClick={onLogisticsAdd}
+                                                    >
+                                                        + Add row
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                         {isOpen && (

@@ -446,7 +446,7 @@
     top: calc(100% + 0.5rem);
     right: 0;
     z-index: 200;
-    width: min(360px, 90vw);
+    width: min(720px, 92vw);
     padding: 1rem 1.1rem;
     background: var(--bg-surface);
     border: 1px solid var(--border-medium);
@@ -455,6 +455,59 @@
     font-size: 0.82rem;
     color: var(--text-secondary);
     line-height: 1.5;
+}
+
+.si-import-example {
+    margin: 0 0 0.75rem;
+}
+
+.si-import-example-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--border-medium);
+    border-radius: 8px;
+    background: var(--bg-main);
+}
+
+.si-import-example-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.si-import-example-table th,
+.si-import-example-table td {
+    padding: 0.4rem 0.55rem;
+    border-bottom: 1px solid var(--border-light);
+    border-right: 1px solid var(--border-light);
+    text-align: left;
+}
+
+.si-import-example-table th:last-child,
+.si-import-example-table td:last-child {
+    border-right: none;
+}
+
+.si-import-example-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.si-import-example-table th {
+    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-surface));
+    color: var(--text-primary);
+    font-weight: 700;
+}
+
+.si-import-example-table td:first-child {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.si-import-example-caption {
+    margin: 0.4rem 0 0 !important;
+    font-size: 0.75rem;
+    color: var(--text-muted);
 }
 
 .si-import-info-panel strong {
@@ -634,23 +687,54 @@
 }
 
 .si-col-desc {
-    width: 24%;
+    width: 18%;
 }
 
 .si-col-class {
     width: 10%;
 }
 
+.si-table thead th.si-col-num,
 .si-col-num {
     width: 8%;
-    text-align: right;
+    text-align: center;
     font-variant-numeric: tabular-nums;
 }
 
+.si-table thead th.si-col-unit,
 .si-col-unit {
     width: 6%;
     text-align: center;
     color: var(--text-secondary);
+}
+
+.si-table thead th.si-col-weight,
+.si-col-weight {
+    width: 9%;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.si-weight-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+    line-height: 1.15;
+}
+
+.si-weight {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.si-weight-note {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
 }
 
 .si-col-status {

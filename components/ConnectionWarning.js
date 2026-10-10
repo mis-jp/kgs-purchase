@@ -1,24 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { withBasePath } from "@/lib/base-path";
 import {
     CONNECTION_KIND,
     CONNECTION_STATUS_EVENT,
+    probeAppHealth,
     reportConnectionOk,
     reportInternetDown,
     reportServerDown,
+    reportSlowConnection,
 } from "@/lib/connection-status";
 import "@/styles/connection-warning.css";
 
 const HEALTH_OK_MS = 45_000;
 const HEALTH_DOWN_MS = 12_000;
-const HEALTH_FETCH_TIMEOUT_MS = 8_000;
 
 const COPY = {
     internet: {
         title: "No internet connection",
         body: "Your device is offline or cannot reach the internet. Any changes you enter will not be saved. Check your connection and try again, or contact the admin if this continues.",
+    },
+    slow: {
+        title: "Connection is slow",
+        body: "The server is up, but your internet connection is too weak for this request to finish. Wait a moment and try again.",
     },
     server: {
         title: "Unable to reach the server",
@@ -26,34 +30,11 @@ const COPY = {
     },
 };
 
-async function probeHealth() {
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-        return CONNECTION_KIND.INTERNET;
-    }
-
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), HEALTH_FETCH_TIMEOUT_MS);
-    try {
-        const res = await fetch(withBasePath("/api/health"), {
-            method: "GET",
-            cache: "no-store",
-            credentials: "include",
-            signal: ctrl.signal,
-        });
-        if (!res.ok) return CONNECTION_KIND.SERVER;
-        const data = await res.json().catch(() => ({}));
-        if (data?.ok === false || data?.database === false) return CONNECTION_KIND.SERVER;
-        return CONNECTION_KIND.OK;
-    } catch (err) {
-        if (typeof navigator !== "undefined" && navigator.onLine === false) {
-            return CONNECTION_KIND.INTERNET;
-        }
-        // Abort / failed fetch while browser thinks it is online → treat as server unreachable
-        return CONNECTION_KIND.SERVER;
-    } finally {
-        clearTimeout(timer);
-    }
-}
+const NOTE = {
+    internet: "Your input data will not be saved until the connection is restored.",
+    slow: "A save may fail while the connection stays this slow.",
+    server: "Your input data will not be saved until the connection is restored.",
+};
 
 /**
  * App-wide centered warning when internet or server/database is unreachable.
@@ -66,7 +47,7 @@ export default function ConnectionWarning() {
 
     const applyKind = useCallback((next) => {
         const normalized =
-            next === CONNECTION_KIND.INTERNET || next === CONNECTION_KIND.SERVER
+            next === CONNECTION_KIND.INTERNET || next === CONNECTION_KIND.SLOW || next === CONNECTION_KIND.SERVER
                 ? next
                 : CONNECTION_KIND.OK;
         if (kindRef.current !== normalized) {
@@ -84,10 +65,11 @@ export default function ConnectionWarning() {
     const runCheck = useCallback(async () => {
         setChecking(true);
         try {
-            const result = await probeHealth();
+            const result = await probeAppHealth();
             applyKind(result);
             if (result === CONNECTION_KIND.OK) reportConnectionOk();
             else if (result === CONNECTION_KIND.INTERNET) reportInternetDown("health_probe");
+            else if (result === CONNECTION_KIND.SLOW) reportSlowConnection("health_probe");
             else reportServerDown("health_probe");
             return result;
         } finally {
@@ -126,17 +108,9 @@ export default function ConnectionWarning() {
         const onStatusEvent = (e) => {
             const next = e?.detail?.kind;
             if (!next) return;
-            // Trust OK / internet immediately. For "server", re-check health so
-            // transient API/ERP failures do not keep the modal stuck open.
-            if (next === CONNECTION_KIND.OK || next === CONNECTION_KIND.INTERNET) {
-                applyKind(next);
-                if (next !== CONNECTION_KIND.OK) setDismissed(false);
-                return;
-            }
-            if (next === CONNECTION_KIND.SERVER) {
-                setDismissed(false);
-                void runCheck();
-            }
+            const was = kindRef.current;
+            applyKind(next);
+            if (next !== CONNECTION_KIND.OK && next !== was) setDismissed(false);
         };
 
         window.addEventListener("online", onOnline);
@@ -157,7 +131,7 @@ export default function ConnectionWarning() {
     }, [applyKind, runCheck]);
 
     const visible =
-        (kind === CONNECTION_KIND.INTERNET || kind === CONNECTION_KIND.SERVER) && !dismissed;
+        (kind === CONNECTION_KIND.INTERNET || kind === CONNECTION_KIND.SLOW || kind === CONNECTION_KIND.SERVER) && !dismissed;
 
     if (!visible) return null;
 
@@ -183,7 +157,7 @@ export default function ConnectionWarning() {
             >
                 <div className={`conn-warn-icon conn-warn-icon--${kind}`} aria-hidden="true">
                     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        {kind === CONNECTION_KIND.INTERNET ? (
+                        {kind === CONNECTION_KIND.INTERNET || kind === CONNECTION_KIND.SLOW ? (
                             <>
                                 <path d="M1 1l22 22" />
                                 <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
@@ -204,7 +178,7 @@ export default function ConnectionWarning() {
                 </div>
                 <h2 id="conn-warn-title" className="conn-warn-title">{copy.title}</h2>
                 <p id="conn-warn-body" className="conn-warn-body">{copy.body}</p>
-                <p className="conn-warn-note">Your input data will not be saved until the connection is restored.</p>
+                <p className="conn-warn-note">{NOTE[kind] || NOTE.server}</p>
                 <div className="conn-warn-actions">
                     <button
                         type="button"

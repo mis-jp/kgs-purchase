@@ -8,6 +8,59 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const NO_STORE = { headers: { "Cache-Control": "no-store" } };
+const SUMMARY_CACHE_MS = 5 * 60 * 1000;
+const SUMMARY_GAP_MS = 700;
+const RATE_LIMIT_WAITS_MS = [0, 2500, 6000];
+
+const summaryCache = new Map();
+const summaryInflight = new Map();
+let summaryQueue = Promise.resolve();
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitError(err) {
+    return /429|too many requests/i.test(String(err?.message || ""));
+}
+
+/** One Inventory Summary call at a time, with a short pause and a few waits on HTTP 429. */
+function loadSummaryResults(inventoryId, credential) {
+    const key = String(inventoryId || "").trim().toUpperCase();
+    const cached = summaryCache.get(key);
+    if (cached && Date.now() - cached.at < SUMMARY_CACHE_MS) {
+        return Promise.resolve(cached.results);
+    }
+    const pending = summaryInflight.get(key);
+    if (pending) return pending;
+
+    const job = summaryQueue.then(async () => {
+        const again = summaryCache.get(key);
+        if (again && Date.now() - again.at < SUMMARY_CACHE_MS) return again.results;
+
+        let lastErr = null;
+        for (let i = 0; i < RATE_LIMIT_WAITS_MS.length; i++) {
+            if (RATE_LIMIT_WAITS_MS[i]) await sleep(RATE_LIMIT_WAITS_MS[i]);
+            try {
+                const results = await AcumaticaService.getInventorySummaryResults(inventoryId, credential);
+                summaryCache.set(key, { at: Date.now(), results });
+                return results;
+            } catch (err) {
+                lastErr = err;
+                if (!isRateLimitError(err)) throw err;
+            }
+        }
+        const busy = new Error("Acumatica is busy right now. Location details will load when the connection quiets down.");
+        busy.status = 429;
+        busy.cause = lastErr;
+        throw busy;
+    }).finally(() => sleep(SUMMARY_GAP_MS));
+
+    summaryQueue = job.then(() => {}, () => {});
+    const tracked = job.finally(() => summaryInflight.delete(key));
+    summaryInflight.set(key, tracked);
+    return tracked;
+}
 
 /**
  * GET /api/inventory/locations?inventoryId=XXX
@@ -41,7 +94,7 @@ export async function GET(request) {
             );
         }
 
-        const results = await AcumaticaService.getInventorySummaryResults(inventoryId, credential);
+        const results = await loadSummaryResults(inventoryId, credential);
         let locations = mapSummaryLocations(results);
 
         if (branch) {
@@ -66,10 +119,17 @@ export async function GET(request) {
             NO_STORE
         );
     } catch (err) {
-        console.error("[Inventory Locations]", err.message);
+        const status = err.status === 429 ? 429 : 500;
+        if (status !== 429) console.error("[Inventory Locations]", err.message);
+        else console.warn("[Inventory Locations] Acumatica rate limit:", err.cause?.message || err.message);
         return NextResponse.json(
-            { message: err.message || "Failed to load locations", locations: [] },
-            { status: 500, ...NO_STORE }
+            {
+                message: status === 429
+                    ? "Acumatica is busy right now. Location details will load when the connection quiets down."
+                    : (err.message || "Failed to load locations"),
+                locations: [],
+            },
+            { status, ...NO_STORE }
         );
     }
 }

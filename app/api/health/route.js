@@ -13,6 +13,22 @@ const NO_STORE = { headers: { "Cache-Control": "no-store" } };
  */
 export async function GET() {
     const db = await MySqlService.pingDatabases(5000);
+    if (!db.ok && db.timedOut) {
+        return NextResponse.json(
+            {
+                ok: true,
+                app: true,
+                database: true,
+                purchase: false,
+                inventory: !!db.inventory,
+                slow: true,
+                reason: "slow",
+                message: "The database answered too slowly. The connection looks weak.",
+                ms: db.ms,
+            },
+            { status: 200, ...NO_STORE }
+        );
+    }
     if (!db.ok) {
         return NextResponse.json(
             {
@@ -21,6 +37,7 @@ export async function GET() {
                 database: false,
                 purchase: false,
                 inventory: !!db.inventory,
+                slow: false,
                 reason: "server",
                 message: "Unable to reach the database server.",
                 ms: db.ms,

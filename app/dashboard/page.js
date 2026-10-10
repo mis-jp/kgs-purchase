@@ -108,17 +108,58 @@ const cellNum = (row, key) => {
     return Number.isFinite(n) ? n.toLocaleString() : String(val);
 };
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function locationErrorMessage(message) {
+    const msg = String(message || "");
+    if (/429|too many requests|acumatica is busy/i.test(msg)) {
+        return "Acumatica is busy right now. Location details will load when the connection quiets down.";
+    }
+    return msg.replace(/\s*\(from https?:\/\/[^)]+\)/gi, "").trim() || "Failed to load locations";
+}
+
+/** Keep location lookups one-at-a-time so opening several rows does not flood Acumatica. */
+const locationFetchQueue = [];
+let locationFetchPump = null;
+
+function enqueueLocationFetch(task) {
+    return new Promise((resolve, reject) => {
+        locationFetchQueue.push({ task, resolve, reject });
+        if (!locationFetchPump) locationFetchPump = pumpLocationFetches();
+    });
+}
+
+async function pumpLocationFetches() {
+    while (locationFetchQueue.length) {
+        const job = locationFetchQueue.shift();
+        try {
+            job.resolve(await job.task());
+        } catch (err) {
+            job.reject(err);
+        }
+        if (locationFetchQueue.length) await sleep(400);
+    }
+    locationFetchPump = null;
+}
+
 /* ── Table Row Component ───────────────────────────────────── */
 const InventoryRow = memo(({ row, branch }) => {
     const [open, setOpen] = useState(false);
     const [locs, setLocs] = useState(null);
     const [locLoading, setLocLoading] = useState(false);
     const [locError, setLocError] = useState("");
+    const [locNote, setLocNote] = useState("");
+    const loadGen = useRef(0);
 
     useEffect(() => {
+        loadGen.current += 1;
         setOpen(false);
         setLocs(null);
         setLocError("");
+        setLocNote("");
+        setLocLoading(false);
     }, [branch]);
 
     const onHand = Number(row.OnHand?.value);
@@ -133,26 +174,51 @@ const InventoryRow = memo(({ row, branch }) => {
 
     const inventoryId = String(row.InventoryID?.value || "").trim();
 
-    const toggle = async (e) => {
+    const loadLocations = async (gen, attempt) => {
+        setLocLoading(true);
+        setLocError("");
+        if (attempt === 0) setLocNote("");
+        try {
+            const res = await enqueueLocationFetch(async () => {
+                const params = new URLSearchParams({ inventoryId });
+                if (branch) params.set("branch", branch);
+                return fetchWithAuth(`/api/inventory/locations?${params}`);
+            });
+            if (gen !== loadGen.current) return;
+            const data = await res.json().catch(() => ({}));
+            const busy = res.status === 429 || /429|too many requests|acumatica is busy/i.test(String(data.message || ""));
+            if (busy && attempt < 2) {
+                setLocNote("Acumatica is busy. Trying again…");
+                await sleep(4000 * (attempt + 1));
+                if (gen !== loadGen.current) return;
+                return loadLocations(gen, attempt + 1);
+            }
+            if (!res.ok) throw new Error(locationErrorMessage(data.message));
+            setLocs(data.locations || []);
+            setLocNote("");
+            setLocLoading(false);
+        } catch (err) {
+            if (gen !== loadGen.current) return;
+            setLocError(locationErrorMessage(err.message));
+            setLocs([]);
+            setLocNote("");
+            setLocLoading(false);
+        }
+    };
+
+    const toggle = (e) => {
         e.stopPropagation();
         const next = !open;
         setOpen(next);
-        if (!next || locs !== null || !inventoryId) return;
-        setLocLoading(true);
-        setLocError("");
-        try {
-            const params = new URLSearchParams({ inventoryId });
-            if (branch) params.set("branch", branch);
-            const res = await fetchWithAuth(`/api/inventory/locations?${params}`);
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.message || "Failed to load locations");
-            setLocs(data.locations || []);
-        } catch (err) {
-            setLocError(err.message || "Failed to load locations");
-            setLocs([]);
-        } finally {
+        if (!next) {
+            loadGen.current += 1;
             setLocLoading(false);
+            setLocNote("");
+            return;
         }
+        if (locs !== null || !inventoryId) return;
+        const gen = ++loadGen.current;
+        loadLocations(gen, 0);
     };
 
     const locationSummary = () => {
@@ -215,7 +281,7 @@ const InventoryRow = memo(({ row, branch }) => {
                                 <span>Warehouse / bin on-hand from Acumatica Inventory Summary</span>
                             </div>
                             {locLoading ? (
-                                <div className="db-location-empty">Loading locations…</div>
+                                <div className="db-location-empty">{locNote || "Loading locations…"}</div>
                             ) : locError ? (
                                 <div className="db-location-empty db-location-error">{locError}</div>
                             ) : !locs?.length ? (

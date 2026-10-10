@@ -38,6 +38,10 @@ export async function GET(request) {
             `[Stock Items API] mode=${result.dataMode || "warehouse"} totalCount=${result.totalCount} totalStock=${result.totalStock}`
         );
 
+        if (result.items.length === 0 && (search || itemClass || dimsStatus)) {
+            return NextResponse.json({ ...result, source: "mysql", companyId }, NO_STORE);
+        }
+
         if (result.items.length === 0) {
             if (cookie === "__bypass__") {
                 return NextResponse.json({ items: [], totalCount: 0, source: "mysql-bypass-empty" }, NO_STORE);
@@ -50,6 +54,14 @@ export async function GET(request) {
         return NextResponse.json({ ...result, source, companyId }, NO_STORE);
     } catch (err) {
         console.error("[Stock Items API MySQL Error]", err.message);
+        const dbDown = /ETIMEDOUT|ECONNRESET|ECONNREFUSED|PROTOCOL_SEQUENCE_TIMEOUT|ETIMEDOUT|QUERY_TIMEOUT|timeout/i.test(
+            `${err?.code || ""} ${err?.message || ""}`
+        );
+        if (dbDown) {
+            return NextResponse.json({
+                message: "The product list is in MySQL, but the inventory database is not answering right now. Refresh again in a moment.",
+            }, { status: 503, ...NO_STORE });
+        }
 
         const cookie = getSessionFromRequest(request);
         if (cookie === "__bypass__") {
