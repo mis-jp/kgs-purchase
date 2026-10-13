@@ -948,6 +948,13 @@ select.po-select-box:focus {
     white-space: nowrap;
 }
 
+.po-amount-missing {
+    white-space: normal;
+    text-align: right;
+    max-width: 7.5rem;
+    color: var(--text-muted);
+}
+
 .po-add-row-btn {
     border: 1px dashed var(--border-medium);
     background: transparent;

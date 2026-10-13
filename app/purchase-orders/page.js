@@ -85,6 +85,22 @@ function poStatusClass(status) {
 
 function fmt(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
+function supplierNameLabel(po) {
+    const id = String(po?.vendorId || "").trim();
+    const name = String(po?.vendorName || "").trim();
+    if (name && (!id || name.toUpperCase() !== id.toUpperCase())) return name;
+    return id ? "Name not on file" : "—";
+}
+
+function orderHasNoAcumaticaCost(po) {
+    const header = Number(po?.totalAmount);
+    const headerEmpty = po?.totalAmount == null || po?.totalAmount === "" || !Number.isFinite(header) || header === 0;
+    if (!headerEmpty) return false;
+    const lines = Array.isArray(po?.lines) ? po.lines : null;
+    if (!lines || lines.length === 0) return false;
+    return !lines.some((line) => Number(line?.extCost) > 0);
+}
+
 function toDateKey(d) {
     if (!d) return "";
     const raw = String(d).trim();
@@ -497,7 +513,7 @@ function poRowMatchesFilters(o, {
     const etdValue = o.promisedDate || ui.etd;
     if (!textIncludes(o.orderNbr, f.orderNbr)) return false;
     if (!textIncludes(o.vendorId, f.vendorId)) return false;
-    if (!textIncludes(o.vendorName, f.vendorName)) return false;
+    if (f.vendorName && !textIncludes(o.vendorName, f.vendorName) && !textIncludes(supplierNameLabel(o), f.vendorName)) return false;
     if (f.origin && (ui.origin || "") !== f.origin) return false;
     if (f.status && normalizePoStatus(o.status).toLowerCase() !== normalizePoStatus(f.status).toLowerCase()) return false;
     if (f.branch && !textIncludes(orderBranchLabel(o), f.branch)) return false;
@@ -867,7 +883,7 @@ function ShipOutOverduePanel({ shipmentCount, orderCount, filtering, onToggleFil
                 </div>
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{orderCount}</span>
-                    <span className="po-shipout-overdue-label">Purchase orders</span>
+                    <span className="po-shipout-overdue-label">Orders with an overdue shipment</span>
                 </div>
             </div>
             <p className="po-shipout-overdue-hint">
@@ -908,7 +924,7 @@ function EtdBeyondContainerPanel({ containerCount, orderCount, filtering, onTogg
                 </div>
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{orderCount}</span>
-                    <span className="po-shipout-overdue-label">Purchase orders</span>
+                    <span className="po-shipout-overdue-label">Orders with a container past ETD</span>
                 </div>
             </div>
             <p className="po-shipout-overdue-hint">
@@ -1885,6 +1901,9 @@ export default function PurchaseOrdersPage() {
                 {error && <div className="si-error">{error}</div>}
 
                 <div className="db-table-wrap po-table-wrap" data-tour="main-table">
+                    {loading && orders.length > 0 && (
+                        <p className="db-list-updating" role="status">Updating the list…</p>
+                    )}
                     <table className="db-table po-table">
                         <thead>
                             <tr className="po-head-labels">
@@ -2067,7 +2086,7 @@ export default function PurchaseOrdersPage() {
                                                 <span className="po-vendor-id" title={po.vendorId || ""}>{po.vendorId || "—"}</span>
                                             </td>
                                             <td className="po-col-vendor-name">
-                                                <span className="po-vendor-name" title={po.vendorName || ""}>{po.vendorName || "—"}</span>
+                                                <span className="po-vendor-name" title={supplierNameLabel(po)}>{supplierNameLabel(po)}</span>
                                             </td>
                                             <td onClick={(e) => e.stopPropagation()}>
                                                 <select
@@ -2158,7 +2177,11 @@ export default function PurchaseOrdersPage() {
                                             </td>
                                             <td className="po-amount-td" onClick={(e) => e.stopPropagation()}>
                                                 <div className="po-amount-stack">
-                                                    <strong className="po-amount-cell">₱{fmt(po.totalAmount)}</strong>
+                                                    {orderHasNoAcumaticaCost(po) ? (
+                                                        <strong className="po-amount-cell po-amount-missing" title="The header amount is empty and no line has an extended cost">No cost in Acumatica</strong>
+                                                    ) : (
+                                                        <strong className="po-amount-cell">₱{fmt(po.totalAmount)}</strong>
+                                                    )}
                                                     <button
                                                         type="button"
                                                         className="po-add-row-btn"

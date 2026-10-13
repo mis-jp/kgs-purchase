@@ -395,18 +395,6 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
                                     );
                                 })}
                                 <label className="idm-dim-field idm-dim-field-calc">
-                                    <span className="idm-dim-label">Piece KG (auto)</span>
-                                    <input
-                                        type="text"
-                                        className="idm-dim-input"
-                                        value={pieceKg == null ? "" : formatWeightKg(pieceKg)}
-                                        readOnly
-                                        tabIndex={-1}
-                                        placeholder="—"
-                                        title="Box KG divided by pieces per box"
-                                    />
-                                </label>
-                                <label className="idm-dim-field idm-dim-field-calc">
                                     <span className="idm-dim-label">On-hand KG (auto)</span>
                                     <input
                                         type="text"
@@ -418,6 +406,9 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
                                         title="Box KG multiplied by the quantity on hand"
                                     />
                                 </label>
+                                <p className="idm-dim-note">
+                                    Piece weight {pieceKg == null ? "—" : `${formatWeightKg(pieceKg)} kg`} — box KG divided by pieces per box.
+                                </p>
                             </div>
                             <div className="idm-dim-actions">
                                 <span className="idm-dim-saved" aria-live="polite">

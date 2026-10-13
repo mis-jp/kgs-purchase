@@ -94,9 +94,14 @@ export async function POST(request) {
         const inventoryDb = process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory";
         const purchaseDb = process.env.MYSQL_PURCHASE_DATABASE || "db_purchase";
 
-        // Ensure Databases exist
-        await conn.query(`CREATE DATABASE IF NOT EXISTS \`${inventoryDb}\``);
-        await conn.query(`CREATE DATABASE IF NOT EXISTS \`${purchaseDb}\``);
+        // A waiting schema change must not sit here and block every other connection.
+        await conn.query("SET SESSION lock_wait_timeout = 3");
+        try {
+            await conn.query(`CREATE DATABASE IF NOT EXISTS \`${inventoryDb}\``);
+            await conn.query(`CREATE DATABASE IF NOT EXISTS \`${purchaseDb}\``);
+        } catch (schemaErr) {
+            console.warn(">>> [Sync API] Database check skipped:", schemaErr.message);
+        }
 
         // Ensure inventory_items exists (VIEW / read-only legacy table — do not sync into this)
         await conn.query(`

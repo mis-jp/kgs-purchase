@@ -271,10 +271,12 @@ const InventoryRow = memo(({ row, branch }) => {
                     {Number.isFinite(available) ? available.toLocaleString() : cellNum(row, "Available")}
                 </td>
                 <td className="db-num">{cellNum(row, "SafetyStock")}</td>
+                <td className="db-num">{cellNum(row, "MOQ")}</td>
+                <td>{cellVal(row, "VendorID")}</td>
             </tr>
             {open && (
                 <tr className="db-location-detail-row">
-                    <td colSpan={9}>
+                    <td colSpan={11}>
                         <div className="db-location-panel">
                             <div className="db-location-panel-head">
                                 <strong>Locations</strong>
@@ -682,10 +684,14 @@ export default function DashboardPage() {
                 <div className="db-table-section" data-tour="inventory-table">
                     <div className="db-table-section-header">
                         <h2>Inventory</h2>
-                        <p>Stock records by inventory ID, branch, and quantity on hand.</p>
+                        <p>
+                            {loading && allInventory.length > 0
+                                ? "Updating the list…"
+                                : "Stock records by inventory ID, branch, and quantity on hand."}
+                        </p>
                     </div>
                     <div className="db-table-wrap">
-                    {loading ? (
+                    {loading && allInventory.length === 0 ? (
                         <div className="db-loading"><div className="db-spinner" /><span>Loading inventory...</span></div>
                     ) : (
                         <table className="db-table db-table--inventory db-table--fit">
@@ -700,12 +706,14 @@ export default function DashboardPage() {
                                     <th className="db-num">On Hand</th>
                                     <th className="db-num">Available</th>
                                     <th className="db-num">Safety Stock</th>
+                                    <th className="db-num">MOQ</th>
+                                    <th>Supplier</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {allInventory.length === 0 ? (
                                     <tr>
-                                        <td colSpan={9} className="db-empty-cell">
+                                        <td colSpan={11} className="db-empty-cell">
                                             No inventory records found. Try another branch or run a full Inventory sync.
                                         </td>
                                     </tr>
@@ -722,7 +730,7 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
-                {!loading && (
+                {(!loading || allInventory.length > 0) && (
                     <PaginationBar
                         page={page}
                         pageSize={ROWS_PER_PAGE}

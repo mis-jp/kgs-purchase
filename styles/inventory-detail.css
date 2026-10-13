@@ -387,6 +387,13 @@
     border-color: var(--accent-primary);
 }
 
+.idm-dim-note {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
 .idm-dim-field-calc .idm-dim-input {
     opacity: 0.92;
     cursor: default;

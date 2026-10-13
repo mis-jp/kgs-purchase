@@ -493,6 +493,13 @@
     color: var(--text-primary);
 }
 
+.db-list-updating {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
 .db-table-section-header p {
     margin: 0.25rem 0 0;
     font-size: 0.82rem;

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import { withBasePath } from "@/lib/base-path";
-import { DIMENSION_FIELDS, calcStockWeightKg, formatWeightKg } from "@/lib/item-dimensions";
+import { DIMENSION_FIELDS, calcPieceWeightKg, calcStockWeightKg, formatWeightKg } from "@/lib/item-dimensions";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
@@ -57,6 +57,8 @@ export default function StockItemsPage() {
     const [dimsStatus, setDimsStatus] = useState(""); // '' | 'set' | 'unset'
     const [dimsSetCount, setDimsSetCount] = useState(0);
     const [dimsUnsetCount, setDimsUnsetCount] = useState(0);
+    const [dimsKnown, setDimsKnown] = useState(null);
+    const [dimsFilterSkipped, setDimsFilterSkipped] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [selectedId, setSelectedId] = useState(null);
@@ -213,8 +215,13 @@ export default function StockItemsPage() {
             setDataSource(data.source || "mysql");
             setTotalCount(data.totalCount ?? 0);
             setTotalStock(data.totalStock ?? 0);
-            setDimsSetCount(Number(data.dimsSetCount) || 0);
-            setDimsUnsetCount(Number(data.dimsUnsetCount) || 0);
+            const known = data.dimsKnown !== false;
+            setDimsKnown(known);
+            setDimsFilterSkipped(Boolean(data.dimsFilterSkipped));
+            if (known) {
+                setDimsSetCount(Number(data.dimsSetCount) || 0);
+                setDimsUnsetCount(Number(data.dimsUnsetCount) || 0);
+            }
             if (Array.isArray(data.itemClasses)) {
                 setItemClasses(data.itemClasses);
             }
@@ -291,7 +298,9 @@ export default function StockItemsPage() {
                                     : (totalCount || 0).toLocaleString()}
                             </span>
                             <span className="si-metric-hint">
-                                {dimsStatus === "set"
+                                {dimsFilterSkipped
+                                    ? "Dimension filter is waiting on the catalog"
+                                    : dimsStatus === "set"
                                     ? "With dimensions set"
                                     : dimsStatus === "unset"
                                     ? "Without dimensions"
@@ -322,12 +331,18 @@ export default function StockItemsPage() {
                         >
                             <span className="si-metric-label">Dims set</span>
                             <span className="si-metric-value">
-                                {loading && dimsSetCount === 0 && dimsUnsetCount === 0
+                                {dimsKnown == null
                                     ? "…"
-                                    : dimsSetCount.toLocaleString()}
+                                    : dimsKnown
+                                    ? dimsSetCount.toLocaleString()
+                                    : "—"}
                             </span>
                             <span className="si-metric-hint">
-                                {dimsStatus === "set" ? "Showing set only — click to show all" : "Click to show only set"}
+                                {!dimsKnown && dimsKnown != null
+                                    ? "Catalog did not answer"
+                                    : dimsStatus === "set"
+                                    ? "Showing set only — click to show all"
+                                    : "Click to show only set"}
                             </span>
                         </button>
                         <button
@@ -339,12 +354,18 @@ export default function StockItemsPage() {
                         >
                             <span className="si-metric-label">Dims not set</span>
                             <span className="si-metric-value">
-                                {loading && dimsSetCount === 0 && dimsUnsetCount === 0
+                                {dimsKnown == null
                                     ? "…"
-                                    : dimsUnsetCount.toLocaleString()}
+                                    : dimsKnown
+                                    ? dimsUnsetCount.toLocaleString()
+                                    : "—"}
                             </span>
                             <span className="si-metric-hint">
-                                {dimsStatus === "unset" ? "Showing unset only — click to show all" : "Click to show only unset"}
+                                {!dimsKnown && dimsKnown != null
+                                    ? "Catalog did not answer"
+                                    : dimsStatus === "unset"
+                                    ? "Showing unset only — click to show all"
+                                    : "Click to show only unset"}
                             </span>
                         </button>
                     </div>
@@ -533,6 +554,14 @@ export default function StockItemsPage() {
                 )}
 
                 {error && <div className="si-error">{error}</div>}
+                {dimsFilterSkipped && (
+                    <div className="si-import-msg" role="status">
+                        Dimensions were not loaded, so the dimension filter is not applied. This is the full list.
+                    </div>
+                )}
+                {loading && items.length > 0 && (
+                    <p className="db-list-updating" role="status">Updating the list…</p>
+                )}
 
                 <div className="si-table-panel" data-tour="main-table">
                     <div className="si-table-scroll">
@@ -577,6 +606,7 @@ export default function StockItemsPage() {
                                         const active =
                                             String(item.itemStatus || "").toLowerCase() === "active";
                                         const onHand = Number(item.totalOnHand) || 0;
+                                        const pieceKg = calcPieceWeightKg(item.weightKg, item.pcsPerBox);
                                         const stockTone =
                                             onHand <= 0 ? "out" : onHand < 10 ? "low" : "ok";
                                         return (
@@ -620,24 +650,20 @@ export default function StockItemsPage() {
                                                 <td className="si-col-weight">
                                                     {item.weightKg == null || !Number.isFinite(Number(item.weightKg)) ? (
                                                         <span className="si-muted" title="Set Box KG on the item">—</span>
-                                                    ) : onHand > 0 ? (
+                                                    ) : (
                                                         <span
                                                             className="si-weight-stack"
-                                                            title={`On-hand weight. ${formatWeightKg(item.weightKg)} kg × ${onHand.toLocaleString()} on hand.`}
+                                                            title={`On-hand weight is box KG × ${onHand.toLocaleString()} on hand. Piece weight is box KG ÷ pieces per box.`}
                                                         >
                                                             <span className="si-weight">
                                                                 {formatWeightKg(calcStockWeightKg({
                                                                     weight_kg: item.weightKg,
-                                                                    pcs_per_box: item.pcsPerBox,
                                                                     qty: onHand,
                                                                 }))} kg
                                                             </span>
-                                                            <span className="si-weight-note">on hand</span>
-                                                        </span>
-                                                    ) : (
-                                                        <span className="si-weight-stack" title="Carton weight. On-hand weight shows when this item has stock.">
-                                                            <span className="si-weight">{formatWeightKg(item.weightKg)} kg</span>
-                                                            <span className="si-weight-note">box</span>
+                                                            <span className="si-weight-note">
+                                                                {pieceKg == null ? "on hand" : `piece ${formatWeightKg(pieceKg)} kg`}
+                                                            </span>
                                                         </span>
                                                     )}
                                                 </td>
