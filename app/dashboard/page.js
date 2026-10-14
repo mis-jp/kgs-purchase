@@ -272,7 +272,7 @@ const InventoryRow = memo(({ row, branch }) => {
                 </td>
                 <td className="db-num">{cellNum(row, "SafetyStock")}</td>
                 <td className="db-num">{cellNum(row, "MOQ")}</td>
-                <td>{cellVal(row, "VendorID")}</td>
+                <td className="db-col-supplier">{cellVal(row, "VendorID")}</td>
             </tr>
             {open && (
                 <tr className="db-location-detail-row">
@@ -707,7 +707,7 @@ export default function DashboardPage() {
                                     <th className="db-num">Available</th>
                                     <th className="db-num">Safety Stock</th>
                                     <th className="db-num">MOQ</th>
-                                    <th>Supplier</th>
+                                    <th className="db-col-supplier">Supplier</th>
                                 </tr>
                             </thead>
                             <tbody>
