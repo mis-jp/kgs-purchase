@@ -109,7 +109,7 @@ async function pingDatabase(database, timeoutMs) {
         connectTimeout: timeoutMs,
     }).then((c) => {
         if (abandoned) {
-            c.end().catch(() => {});
+            c.end().catch(() => { });
             throw Object.assign(new Error("DB_PING_TIMEOUT"), { code: "ETIMEDOUT" });
         }
         conn = c;
@@ -133,7 +133,7 @@ async function pingDatabase(database, timeoutMs) {
         return { ok: false, error: err?.code || err?.message || "database unreachable" };
     } finally {
         wait.cancel();
-        if (conn) await conn.end().catch(() => {});
+        if (conn) await conn.end().catch(() => { });
     }
 }
 
@@ -174,7 +174,7 @@ async function optionalInventoryRows(sql, params = [], ms = 2000) {
         return null;
     } finally {
         if (holder.conn) {
-            if (finished) holder.conn.end().catch(() => {});
+            if (finished) holder.conn.end().catch(() => { });
             else holder.conn.destroy();
         }
     }
@@ -376,6 +376,10 @@ function inventoryPlanningCols(alias = "c") {
                     ${alias}.lead_time_days as LeadTimeDays,
                     ${alias}.safety_stock as SafetyStock,
                     ${alias}.moq as MOQ`;
+}
+
+export function inventoryDistinctCountSql(alias = "i", outputAlias = "total") {
+    return `COUNT(DISTINCT TRIM(${alias}.inventory_id)) as ${outputAlias}`;
 }
 
 function inventorySelectCols(layout) {
@@ -1275,8 +1279,8 @@ export const MySqlService = {
     },
 
     async _backfillPurchaseHistoryVendorNames() {
-            let updated = 0;
-            const [fromVendors] = await purchasePool.query(`
+        let updated = 0;
+        const [fromVendors] = await purchasePool.query(`
                 UPDATE purchase_history h
                 INNER JOIN vendors v ON v.vendor_id COLLATE utf8mb4_unicode_ci = h.vendor_id
                 SET h.vendor_name = v.vendor_name
@@ -1284,10 +1288,10 @@ export const MySqlService = {
                   AND v.vendor_name IS NOT NULL
                   AND TRIM(v.vendor_name) != ''
             `);
-            updated += Number(fromVendors?.affectedRows) || 0;
+        updated += Number(fromVendors?.affectedRows) || 0;
 
-            // Same vendor_id already has a name on another PO — copy it
-            const [fromSibling] = await purchasePool.query(`
+        // Same vendor_id already has a name on another PO — copy it
+        const [fromSibling] = await purchasePool.query(`
                 UPDATE purchase_history h
                 INNER JOIN (
                     SELECT vendor_id, MAX(NULLIF(TRIM(vendor_name), '')) AS vendor_name
@@ -1299,9 +1303,9 @@ export const MySqlService = {
                 WHERE (h.vendor_name IS NULL OR TRIM(h.vendor_name) = '')
                   AND src.vendor_name IS NOT NULL
             `);
-            updated += Number(fromSibling?.affectedRows) || 0;
-            if (updated > 0) invalidateCache("po:");
-            return updated;
+        updated += Number(fromSibling?.affectedRows) || 0;
+        if (updated > 0) invalidateCache("po:");
+        return updated;
     },
 
     /**
@@ -1416,26 +1420,26 @@ export const MySqlService = {
     async calculateAndStoreVendorPerformance() {
         try {
             console.log(">>> [MySQL] Calculating Vendor Performance Metrics...");
-            
+
             // 1. Get Lead Times
             const leadTimes = await this.getVendorLeadTimes();
-            
+
             // 2. Get Reliability Scores
             const reliability = await this.getSupplierPerformance();
-            
+
             // 3. Update Vendors table
             const vendorIds = new Set([...Object.keys(leadTimes), ...Object.keys(reliability)]);
-            
+
             for (const vid of vendorIds) {
                 const lt = leadTimes[vid]?.days || 0;
                 const rs = reliability[vid]?.score ?? null;
-                
+
                 await purchasePool.query(
                     `UPDATE vendors SET avg_lead_time = ?, reliability_score = ? WHERE vendor_id = ?`,
                     [lt, rs, vid]
                 );
             }
-            
+
             console.log(`>>> [MySQL] Performance calculation complete for ${vendorIds.size} vendors.`);
             return vendorIds.size;
         } catch (err) {
@@ -1882,7 +1886,7 @@ export const MySqlService = {
                     ...aggWhereParams,
                 ]);
                 const [[{ total }]] = await pool.query(
-                    `SELECT COUNT(*) as total ${aggFrom} ${salesJoin} ${aggWherePart}`,
+                    `SELECT ${inventoryDistinctCountSql("i")} ${aggFrom} ${salesJoin} ${aggWherePart}`,
                     [...aggParams, ...salesParams, ...aggWhereParams]
                 );
                 return {
@@ -1907,7 +1911,7 @@ export const MySqlService = {
 
             const [rows] = await pool.query(query, [...salesParams, ...params]);
             const [[{ total }]] = await pool.query(
-                `SELECT COUNT(*) as total 
+                `SELECT ${inventoryDistinctCountSql("i")} 
                  ${fromClause}
                  ${salesJoin}
                  ${wherePart}`,
@@ -2007,7 +2011,7 @@ export const MySqlService = {
                 `SELECT COUNT(*) AS c FROM \`${FORECAST_STOCK_TABLE}\`
                  WHERE company_id = ? AND warehouse_id = '__catalog__'`,
                 [effectiveCompanyId]
-              )
+            )
             : [[{ c: 0 }]];
         const catalogFromForecast = useForecast && Number(fisCat?.c) > 0;
         const synthesizeCatalog = useForecast && !catalogFromForecast;
@@ -2091,7 +2095,7 @@ export const MySqlService = {
         ]);
 
         const [[{ total }]] = await queryPool.query(
-            `SELECT COUNT(*) as total
+            `SELECT ${inventoryDistinctCountSql("i")}
              ${fromBody}
              ${wherePart}`,
             [...fromParams, ...stockParams, ...params]
@@ -2164,7 +2168,7 @@ export const MySqlService = {
                 params
             );
             const [[{ total }]] = await purchasePool.query(
-                `SELECT COUNT(*) AS total FROM \`${FORECAST_STOCK_TABLE}\` i ${wherePart}`,
+                `SELECT ${inventoryDistinctCountSql("i")} FROM \`${FORECAST_STOCK_TABLE}\` i ${wherePart}`,
                 params
             );
             return {
@@ -2215,7 +2219,7 @@ export const MySqlService = {
             params
         );
         const [[{ total }]] = await pool.query(
-            `SELECT COUNT(*) AS total FROM \`${INVENTORY_VIEW_TABLE}\` i ${wherePart}`,
+            `SELECT ${inventoryDistinctCountSql("i")} FROM \`${INVENTORY_VIEW_TABLE}\` i ${wherePart}`,
             params
         );
 
@@ -2270,7 +2274,7 @@ export const MySqlService = {
 
         const [rows] = await pool.query(query, [...salesParams, ...params]);
         const [[{ total }]] = await pool.query(
-            `SELECT COUNT(*) as total FROM \`${INVENTORY_VIEW_TABLE}\` i ${wherePart}`,
+            `SELECT ${inventoryDistinctCountSql("i")} FROM \`${INVENTORY_VIEW_TABLE}\` i ${wherePart}`,
             params
         );
 
@@ -2311,7 +2315,9 @@ export const MySqlService = {
      */
     async getGlobalStats(branch = "", search = "", companyId = "main") {
         const cacheKey = `global-stats-v8:${companyId}:${branch}:${search}`;
-        return getCached(cacheKey, 120_000, () => this._computeGlobalStats(branch, search, companyId));
+        // Dashboard metrics must refresh much faster than the previous 2-minute cache
+        // because stale totals make inventory look inaccurate to end users.
+        return getCached(cacheKey, 30_000, () => this._computeGlobalStats(branch, search, companyId));
     },
 
     async _computeGlobalStats(branch = "", search = "", companyId = "main") {
@@ -2797,7 +2803,7 @@ export const MySqlService = {
         const summaryKey = `stock-items-kpi:${companyId}:${branch || ""}:${classFilter}:${search || ""}`;
         const summaryPromise = getCached(summaryKey, 60_000, async () => {
             const [[row]] = await purchasePool.query(
-                `SELECT COUNT(*) AS total
+                `SELECT ${inventoryDistinctCountSql("i")}
                  FROM \`${FORECAST_STOCK_TABLE}\` i
                  ${whereClause}`,
                 params
@@ -2874,13 +2880,13 @@ export const MySqlService = {
         let total = Number(summary.unfilteredTotal) || 0;
         if (wantsDimFilter && !dimsFilterSkipped) {
             const [[{ counted }]] = await purchasePool.query(
-                `SELECT COUNT(*) AS counted FROM \`${FORECAST_STOCK_TABLE}\` i ${listWhere}`,
+                `SELECT ${inventoryDistinctCountSql("i", "counted")} FROM \`${FORECAST_STOCK_TABLE}\` i ${listWhere}`,
                 listParams
             );
             total = Number(counted) || 0;
         } else if (!total && rows.length) {
             const [[{ counted }]] = await purchasePool.query(
-                `SELECT COUNT(*) AS counted FROM \`${FORECAST_STOCK_TABLE}\` i ${whereClause}`,
+                `SELECT ${inventoryDistinctCountSql("i", "counted")} FROM \`${FORECAST_STOCK_TABLE}\` i ${whereClause}`,
                 params
             );
             total = Number(counted) || rows.length;
@@ -3054,7 +3060,7 @@ export const MySqlService = {
                    AND TRIM(branch_name) != ''
                    AND ${salesEx.clause}
                  ORDER BY branch_name ASC`
-            , salesEx.params);
+                , salesEx.params);
             return rows
                 .map((r) => String(r.branchId || "").trim())
                 .filter(Boolean);
@@ -3538,7 +3544,7 @@ export const MySqlService = {
 
             // Use the first row for shared metadata
             const first = rows[0];
-            
+
             // Map all rows to branch details
             const branches = rows.map(r => ({
                 branchId: r.branchId || r.siteId,
@@ -6241,8 +6247,8 @@ export const MySqlService = {
 
     async ensureReplenishmentCacheTable() {
         return getCached("replenishment:table-ready:v2", 3_600_000, async () => {
-        try {
-            await purchasePool.query(`
+            try {
+                await purchasePool.query(`
                 CREATE TABLE IF NOT EXISTS replenishment_cache (
                     company_id VARCHAR(50) NOT NULL DEFAULT 'main',
                     branch_id VARCHAR(100) NOT NULL,
@@ -6273,19 +6279,19 @@ export const MySqlService = {
                     KEY idx_repl_updated (updated_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             `);
-            try {
-                await purchasePool.query(
-                    `ALTER TABLE replenishment_cache ADD COLUMN item_class VARCHAR(100) NULL AFTER description`
-                );
-            } catch (alterErr) {
-                // Column already exists on upgraded DBs
-                if (alterErr?.code !== "ER_DUP_FIELDNAME") throw alterErr;
+                try {
+                    await purchasePool.query(
+                        `ALTER TABLE replenishment_cache ADD COLUMN item_class VARCHAR(100) NULL AFTER description`
+                    );
+                } catch (alterErr) {
+                    // Column already exists on upgraded DBs
+                    if (alterErr?.code !== "ER_DUP_FIELDNAME") throw alterErr;
+                }
+                return true;
+            } catch (err) {
+                console.error("[MySQL ensureReplenishmentCacheTable Error]", err);
+                return false;
             }
-            return true;
-        } catch (err) {
-            console.error("[MySQL ensureReplenishmentCacheTable Error]", err);
-            return false;
-        }
         });
     },
 

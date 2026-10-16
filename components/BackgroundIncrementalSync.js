@@ -3,11 +3,20 @@
 import { useEffect, useRef } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import { reportAutoSyncStatus } from "@/lib/auto-sync-status";
+import {
+    QUICK_SYNC_MIN_GAP_MS,
+    readLastQuickSyncAt,
+    shouldSkipQuickSync,
+    writeLastQuickSyncAt,
+} from "@/lib/auto-sync-throttle";
 
-const INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-const INITIAL_DELAY_MS = 20 * 1000;
+const INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const INITIAL_DELAY_MS = 45 * 1000;
+const FULL_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const LOCK_KEY = "acu_auto_sync_lock";
 const LOCK_TTL_MS = 9 * 60 * 1000;
+const FULL_SYNC_KEY = "acu_full_sync_last_run";
+const QUICK_SYNC_KEY = "acu_last_quick_sync";
 
 /**
  * While anyone is signed in (user or admin), quietly run Quick Sync (incremental)
@@ -94,16 +103,49 @@ export default function BackgroundIncrementalSync() {
             return { ok: res.ok && !failed, message };
         };
 
+        const runFullSyncIfNeeded = async () => {
+            try {
+                const now = Date.now();
+                const raw = localStorage.getItem(FULL_SYNC_KEY);
+                if (raw) {
+                    const last = Number(JSON.parse(raw)?.ts || 0);
+                    if (Number.isFinite(last) && now - last < FULL_SYNC_INTERVAL_MS) {
+                        return;
+                    }
+                }
+                localStorage.setItem(FULL_SYNC_KEY, JSON.stringify({ ts: now }));
+                reportAutoSyncStatus({ running: true, progress: 16, section: "Full validation sync" });
+                console.log("[AutoSync] Running full validation sync for complete coverage.");
+                const res = await fetchWithAuth("/api/sync?inventory=true&sales=true&mode=full", { method: "POST" });
+                if (res.ok) {
+                    const result = await drainStream(res);
+                    if (result.ok) {
+                        console.log("[AutoSync] Full validation sync finished.", result.message || "");
+                    }
+                }
+            } catch (err) {
+                console.warn("[AutoSync] Full validation sync skipped:", err?.message || err);
+            }
+        };
+
         const runQuickSync = async (reason) => {
             if (cancelled || runningRef.current) return;
             if (!hasSession()) return;
             if (document.visibilityState === "hidden") return;
+
+            const now = Date.now();
+            const lastSyncAt = readLastQuickSyncAt(localStorage, QUICK_SYNC_KEY);
+            if (shouldSkipQuickSync(now, lastSyncAt, QUICK_SYNC_MIN_GAP_MS)) {
+                console.log(`[AutoSync] Skipped Quick Sync (${reason}) — last run was too recent.`);
+                return;
+            }
             if (!acquireLock()) return;
 
             runningRef.current = true;
             reportAutoSyncStatus({ running: true, progress: 4, section: "Quick Sync" });
             try {
                 console.log(`[AutoSync] Starting Quick Sync (${reason})…`);
+                writeLastQuickSyncAt(localStorage, QUICK_SYNC_KEY, now);
                 const res = await fetchWithAuth(
                     "/api/sync?inventory=true&sales=true&mode=incremental",
                     { method: "POST" }
@@ -123,6 +165,9 @@ export default function BackgroundIncrementalSync() {
                 const result = await drainStream(res);
                 if (result.ok) {
                     console.log("[AutoSync] Quick Sync finished.", result.message || "");
+                    if (reason === "online" || reason === "visible") {
+                        await runFullSyncIfNeeded();
+                    }
                 } else {
                     console.warn("[AutoSync] Quick Sync failed:", result.message || res.status);
                 }

@@ -21,7 +21,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const rebuildInFlight = new Map();
-const MEM_CACHE_MS = 120_000;
+// Replenishment summaries are business-critical; do not serve a 2-minute stale cache
+// when the ERP sync watermark has moved and branch demand has changed.
+const MEM_CACHE_MS = 30_000;
 
 function isCacheFresh(cacheUpdatedAt, dataWatermark) {
     if (!cacheUpdatedAt) return false;
@@ -190,9 +192,9 @@ function paginateRecommendations(all, page, pageSize, filters = {}) {
                 urgent: filtered.filter((r) => r.priorityLevel === "High").length,
                 soon: filtered.filter((r) => r.priorityLevel === "Medium").length,
                 totalSuggested: filtered.reduce(
-                (s, r) => s + Math.max(0, Number(r.suggestedQty) || 0),
-                0
-            ),
+                    (s, r) => s + Math.max(0, Number(r.suggestedQty) || 0),
+                    0
+                ),
                 itemCount: totalItems,
             },
         };
@@ -371,7 +373,7 @@ export async function GET(request) {
                         scheduleBackgroundRebuild(branch, companyId, effectiveCompanyId);
                     }
                 })
-                .catch(() => {});
+                .catch(() => { });
 
             const recommendations = cachedPage.recommendations || [];
             const stats = {

@@ -17,8 +17,7 @@ import {
     rangeFromMonthInputs,
 } from "@/lib/forecast-generator";
 import { logUserActivity, summarizeActivityDetail } from "@/lib/activity-log";
-import { refreshForecastComingPos, withTimeout } from "@/lib/refresh-forecast-pos";
-import { refreshForecastSales } from "@/lib/refresh-forecast-sales";
+import { getCached } from "@/lib/server-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +54,21 @@ function mapRow(raw) {
         lastYearQty: Math.max(0, Number(raw.lastYearQty) || 0),
         ...computed,
     };
+}
+
+function forecastQueryKey({ companyId, branch, search, itemClass, last3Start, last3End, lastYearStart, lastYearEnd, page, pageSize }) {
+    return JSON.stringify({
+        companyId,
+        branch: branch || "",
+        search: search || "",
+        itemClass: itemClass || "",
+        last3Start: last3Start || "",
+        last3End: last3End || "",
+        lastYearStart: lastYearStart || "",
+        lastYearEnd: lastYearEnd || "",
+        page: page || 1,
+        pageSize: pageSize || 10,
+    });
 }
 
 export async function GET(request) {
@@ -97,6 +111,7 @@ export async function GET(request) {
         const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
         // UI list stays small; CSV export needs the full filtered set (USER + admin).
         const isExport = searchParams.get("export") === "1";
+        const isManualRefresh = searchParams.get("refresh") === "1";
         const pageSizeRaw = Math.max(1, parseInt(searchParams.get("pageSize") || "10", 10) || 10);
         const pageSize = isExport
             ? Math.min(50_000, pageSizeRaw)
@@ -105,51 +120,21 @@ export async function GET(request) {
         const itemClass = searchParams.get("itemClass") || "";
         const companyId = getActiveCompanyFromRequest(request) || "main";
 
-        // Skip PO refresh on export so a large download is not cut short by the 15s timeout.
-        if (!isExport) {
-            try {
-                const poRefresh = await withTimeout(refreshForecastComingPos({ branch, cookie }), 15_000);
-                if (!poRefresh?.skipped) {
-                    console.log("[Forecast Generator] Coming PO refresh", {
-                        branch: branch || "ALL",
-                        ok: poRefresh?.ok,
-                        reason: poRefresh?.reason || null,
-                        orders: poRefresh?.orders || 0,
-                    });
-                }
-            } catch (refreshErr) {
-                console.warn("[Forecast Generator] Coming PO refresh skipped:", refreshErr.message);
-            }
-        }
+        // Forecast page reads from MySQL only. Acumatica-to-MySQL sync happens in the
+        // background via the application-level sync API so page loads stay fast.
+        const salesGaps = await getCached(
+            `forecast:salesGaps:${JSON.stringify({ last3Start: last3.start, last3End: last3.end, lastYearStart: lastYear.start, lastYearEnd: lastYear.end })}`,
+            30_000,
+            () => MySqlService.listMissingSalesInvoiceMonths({
+                ranges: [
+                    { start: last3.start, end: last3.end },
+                    { start: lastYear.start, end: lastYear.end },
+                ],
+                branch: "",
+            }).catch(() => [])
+        );
 
-        const salesGaps = await MySqlService.listMissingSalesInvoiceMonths({
-            ranges: [
-                { start: last3.start, end: last3.end },
-                { start: lastYear.start, end: lastYear.end },
-            ],
-            branch: "",
-        }).catch(() => []);
-
-        if (salesGaps.length) {
-            void refreshForecastSales({
-                last3Start: last3.start,
-                last3End: last3.end,
-                lastYearStart: lastYear.start,
-                lastYearEnd: lastYear.end,
-                cookie,
-            }).then((salesRefresh) => {
-                console.log("[Forecast Generator] Sales backfill", {
-                    ok: salesRefresh?.ok,
-                    reason: salesRefresh?.reason || null,
-                    months: salesRefresh?.months || salesGaps,
-                    lines: salesRefresh?.lines || 0,
-                });
-            }).catch((err) => {
-                console.warn("[Forecast Generator] Sales backfill failed:", err.message);
-            });
-        }
-
-        const result = await MySqlService.getForecastGenerator({
+        const queryKey = forecastQueryKey({
             companyId,
             branch,
             search,
@@ -161,6 +146,22 @@ export async function GET(request) {
             page,
             pageSize,
         });
+        const result = await getCached(
+            `forecast:rows:${queryKey}`,
+            15_000,
+            () => MySqlService.getForecastGenerator({
+                companyId,
+                branch,
+                search,
+                itemClass,
+                last3Start: last3.start,
+                last3End: last3.end,
+                lastYearStart: lastYear.start,
+                lastYearEnd: lastYear.end,
+                page,
+                pageSize,
+            })
+        );
 
         const data = (result.rows || []).map(mapRow);
         const totalItems = result.totalItems || 0;

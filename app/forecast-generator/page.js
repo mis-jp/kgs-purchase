@@ -14,6 +14,8 @@ import "@/styles/forecast-generator.css";
 
 const PAGE_SIZE = 10;
 const DEFAULTS = getDefaultForecastPeriods();
+const FORECAST_SYNC_TTL_MS = 10 * 60 * 1000;
+const FORECAST_SYNC_LOCK_KEY = "fg_auto_sync_lock";
 
 const IconFilter = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
@@ -166,7 +168,30 @@ export default function ForecastGeneratorPage() {
         })();
     }, [mounted]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const fetchForecast = useCallback(async (pageOverride = page, { silent = false } = {}) => {
+    useEffect(() => {
+        if (!mounted) return;
+        try {
+            const raw = localStorage.getItem(FORECAST_SYNC_LOCK_KEY);
+            const now = Date.now();
+            if (raw) {
+                const lock = JSON.parse(raw);
+                if (lock?.ts && now - Number(lock.ts) < FORECAST_SYNC_TTL_MS) {
+                    return;
+                }
+            }
+            localStorage.setItem(FORECAST_SYNC_LOCK_KEY, JSON.stringify({ ts: now }));
+        } catch {
+            // ignore storage issues; sync should still continue when possible
+        }
+
+        fetchWithAuth("/api/sync?inventory=true&sales=true&mode=incremental", {
+            method: "POST",
+        }).catch(() => {
+            // background sync is best-effort and must not block the Forecast page
+        });
+    }, [mounted, selectedBranch]);
+
+    const fetchForecast = useCallback(async (pageOverride = page, { silent = false, forceRefresh = false } = {}) => {
         if (!silent) {
             setLoading(true);
             setError("");
@@ -182,6 +207,7 @@ export default function ForecastGeneratorPage() {
                 itemClass,
                 page: String(pageOverride),
                 pageSize: String(PAGE_SIZE),
+                refresh: forceRefresh ? "1" : "0",
             });
             const res = await fetchWithAuth(`/api/forecast-generator?${params}`);
             if (!res.ok) {
@@ -190,6 +216,7 @@ export default function ForecastGeneratorPage() {
                 return;
             }
             const result = await res.json();
+            const gaps = Array.isArray(result.salesGaps) ? result.salesGaps : [];
             setRows(result.data || []);
             setDrafts({});
             setMetrics(result.metrics || {});
@@ -197,7 +224,17 @@ export default function ForecastGeneratorPage() {
             setClassSummary(Array.isArray(result.classSummary) ? result.classSummary : []);
             if (result.periods) setPeriods(result.periods);
             setPagination(result.pagination || { totalItems: 0, totalPages: 0 });
-            setSalesGaps(Array.isArray(result.salesGaps) ? result.salesGaps : []);
+            setSalesGaps(gaps);
+
+            if (gaps.length > 0 && !forceRefresh) {
+                try {
+                    fetchWithAuth("/api/sync?inventory=true&sales=true&mode=full", {
+                        method: "POST",
+                    }).catch(() => { });
+                } catch {
+                    // best effort only; the page should remain responsive
+                }
+            }
         } catch (err) {
             if (err.message === "Unauthorized") return;
             if (!silent) setError("Unable to connect to the server.");
@@ -208,11 +245,13 @@ export default function ForecastGeneratorPage() {
 
     useEffect(() => {
         if (!mounted) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setPage(1);
     }, [selectedBranch, last3From, last3To, lyFrom, lyTo, search, itemClass, mounted]);
 
     useEffect(() => {
         if (!mounted) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         fetchForecast(page);
     }, [fetchForecast, mounted, page]);
 
@@ -300,7 +339,7 @@ export default function ForecastGeneratorPage() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
-            }).catch(() => {});
+            }).catch(() => { });
         });
     }, []);
 
@@ -390,7 +429,10 @@ export default function ForecastGeneratorPage() {
 
     useEffect(() => {
         const totalPages = Math.max(1, Math.ceil(classSummary.length / CLASS_SUMMARY_PAGE_SIZE));
-        if (classSummaryPage > totalPages) setClassSummaryPage(totalPages);
+        if (classSummaryPage > totalPages) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
+            setClassSummaryPage(totalPages);
+        }
     }, [classSummary.length, classSummaryPage]);
 
     useEffect(() => {
@@ -650,7 +692,15 @@ export default function ForecastGeneratorPage() {
                         <button className="db-action-btn" type="button" onClick={exportCSV} disabled={loading || pagination.totalItems === 0}>
                             <IconDownload /> Export CSV
                         </button>
-                        <button className="db-refresh-btn" type="button" onClick={() => fetchForecast(page)} disabled={loading}>
+                        <button
+                            className="db-refresh-btn"
+                            type="button"
+                            onClick={() => {
+                                fetchWithAuth("/api/sync?inventory=true&sales=true&mode=incremental", { method: "POST" }).catch(() => {});
+                                fetchForecast(page, { forceRefresh: true });
+                            }}
+                            disabled={loading}
+                        >
                             <IconRefresh /> Refresh
                         </button>
                     </div>
