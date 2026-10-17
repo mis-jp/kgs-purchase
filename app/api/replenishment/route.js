@@ -16,6 +16,7 @@ import {
 } from "@/lib/replenishment-engine";
 import { buildBranchBrief } from "@/lib/replenishment-insights";
 import { getCached, invalidateCache } from "@/lib/server-cache";
+import { cacheKeys } from "@/lib/cache-invalidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,13 +71,10 @@ function briefFromStats(stats, branch) {
 function scheduleBackgroundRebuild(branch, companyId, effectiveCompanyId) {
     const key = `${effectiveCompanyId}:${branch}`;
     if (rebuildInFlight.has(key)) return;
-    const branchKey = String(branch).trim().toUpperCase();
     const job = computeReplenishmentForBranch(branch, companyId)
         .then(async (computed) => {
+            // upsertReplenishmentCache clears this branch's cached pages after it commits.
             await MySqlService.upsertReplenishmentCache(effectiveCompanyId, branch, computed.recommendations);
-            invalidateCache(`replenishment:api:${effectiveCompanyId}:${branchKey}`);
-            invalidateCache(`replenishment:full:${effectiveCompanyId}:${branch}`);
-            invalidateCache(`replenishment:page:${effectiveCompanyId}:${branch}`);
         })
         .catch((err) => console.error("[Replenishment stale rebuild]", err))
         .finally(() => rebuildInFlight.delete(key));
@@ -115,10 +113,14 @@ async function loadCachedPage(effectiveCompanyId, branch, {
     const priorityKey = String(priority || "").trim().toLowerCase().slice(0, 20);
     const classKey = String(itemClass || "").trim().toLowerCase().slice(0, 80);
     const overlayKey = liveOverlay ? "live" : "cache";
-    const memKey = `replenishment:api:names:${effectiveCompanyId}:${branchKey}:${page}:${pageSize}:${searchKey}:${priorityKey}:${classKey}:${overlayKey}`;
+    const memKey = cacheKeys.replenishmentPage(
+        effectiveCompanyId,
+        branchKey,
+        `${page}:${pageSize}:${searchKey}:${priorityKey}:${classKey}:${overlayKey}`
+    );
 
     if (bypassMemCache) {
-        invalidateCache(`replenishment:api:${effectiveCompanyId}:${branchKey}`);
+        invalidateCache(cacheKeys.replenishmentPagesPrefix(effectiveCompanyId, branchKey));
     }
 
     const filters = { search: searchKey, priority: priorityKey, itemClass: classKey };
@@ -234,7 +236,7 @@ async function serveLiveReplenishment({
     invalidateCache(`accurateRetailDemand:`);
     invalidateCache(`liveBranchDemand:`);
     invalidateCache(`replSalesMap:`);
-    invalidateCache(`replenishment:api:${effectiveCompanyId}:${branchKey}`);
+    invalidateCache(cacheKeys.replenishmentPagesPrefix(effectiveCompanyId, branchKey));
 
     // MAIN rollup depends on other branches — refresh them in the background after we
     // return this branch's live page (do not block the response on a full rebuild).
@@ -243,9 +245,8 @@ async function serveLiveReplenishment({
     }
 
     const computed = await computeReplenishmentForBranch(branch, companyId);
+    // Clears this branch's cached pages again after the new rows commit.
     await MySqlService.upsertReplenishmentCache(effectiveCompanyId, branch, computed.recommendations);
-    invalidateCache(`replenishment:api:${effectiveCompanyId}:${branchKey}`);
-    invalidateCache(`replenishment:page:${effectiveCompanyId}:${branch}`);
 
     const paged = paginateRecommendations(computed.recommendations, page, pageSize, {
         search,

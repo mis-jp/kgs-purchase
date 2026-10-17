@@ -18,6 +18,7 @@ import {
 } from "@/lib/forecast-generator";
 import { logUserActivity, summarizeActivityDetail } from "@/lib/activity-log";
 import { getCached } from "@/lib/server-cache";
+import { cacheKeys } from "@/lib/cache-invalidation";
 
 export const dynamic = "force-dynamic";
 
@@ -123,7 +124,7 @@ export async function GET(request) {
         // Forecast page reads from MySQL only. Acumatica-to-MySQL sync happens in the
         // background via the application-level sync API so page loads stay fast.
         const salesGaps = await getCached(
-            `forecast:salesGaps:${JSON.stringify({ last3Start: last3.start, last3End: last3.end, lastYearStart: lastYear.start, lastYearEnd: lastYear.end })}`,
+            cacheKeys.forecastSalesGaps(JSON.stringify({ last3Start: last3.start, last3End: last3.end, lastYearStart: lastYear.start, lastYearEnd: lastYear.end })),
             30_000,
             () => MySqlService.listMissingSalesInvoiceMonths({
                 ranges: [
@@ -146,8 +147,10 @@ export async function GET(request) {
             page,
             pageSize,
         });
+        // Keyed by company + forecast branch so saving one branch's input only
+        // refreshes that branch's cached rows (see "forecast-input.saved").
         const result = await getCached(
-            `forecast:rows:${queryKey}`,
+            cacheKeys.forecastRows(companyId, forecastBranchKey(branch), queryKey),
             15_000,
             () => MySqlService.getForecastGenerator({
                 companyId,

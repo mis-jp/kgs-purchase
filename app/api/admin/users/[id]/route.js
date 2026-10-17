@@ -9,14 +9,14 @@ import {
 } from "@/lib/app-users";
 import { normalizeBranchIds } from "@/lib/branch-access";
 import { normalizeModuleAccessInput, serializeAllowedModules } from "@/lib/module-access";
-import { setLocalUserSession, getSessionIdFromRequest } from "@/lib/session-store";
+import { refreshLocalUserSessions } from "@/lib/session-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function PATCH(request, { params }) {
     try {
-        const admin = await requireAdmin(request);
+        await requireAdmin(request);
         const id = Number((await params).id);
         if (!Number.isFinite(id) || id < 1) {
             return NextResponse.json({ message: "Invalid user id" }, { status: 400 });
@@ -108,11 +108,9 @@ export async function PATCH(request, { params }) {
         }
         const updated = await sanitizeUserWithBranches(await MySqlService.getAppUserById(id));
 
-        // Keep current session profile in sync if editing self
-        if (Number(admin.id) === id) {
-            const sessionId = getSessionIdFromRequest(request);
-            if (sessionId) setLocalUserSession(sessionId, updated);
-        }
+        // Writes above have committed: refresh this user's cached session profile
+        // everywhere (previously only when admins edited themselves).
+        refreshLocalUserSessions(id, updated);
 
         return NextResponse.json({ user: updated });
     } catch (err) {

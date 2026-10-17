@@ -3,7 +3,6 @@ import { getSessionFromRequest, getActiveCompanyFromRequest } from "@/lib/sessio
 import { getSystemAcumaticaCredential } from "@/lib/acumatica-system-auth";
 import { AcumaticaService, extractDamageLevelsFromSummary } from "@/services/acumatica";
 import { MySqlService } from "@/services/mysql";
-import { invalidateCache } from "@/lib/server-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,10 +64,10 @@ export async function POST(request) {
         );
 
         if (withQty.length) {
+            // upsertInventoryLevels clears the current stats / branch / count caches
+            // after it writes. (The old "global-stats-v5:" prefix here matched no key.)
             await MySqlService.upsertInventoryLevels(withQty, companyId);
         }
-
-        invalidateCache("global-stats-v5:");
 
         const damageStock = withQty.reduce((s, l) => s + (Number(l.on_hand) || 0), 0);
         const damageCount = new Set(withQty.map((l) => l.inventory_id)).size;

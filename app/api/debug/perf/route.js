@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session-store";
 import { getCacheStats } from "@/lib/server-cache";
+import { getInvalidationFailures } from "@/lib/cache-invalidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,8 @@ export async function GET(request) {
     return NextResponse.json(
         {
             cache: getCacheStats(),
+            // Invalidations that still failed after retries (entries then expire on TTL).
+            invalidationFailures: getInvalidationFailures(),
             memory: {
                 rssMb: Math.round(mem.rss / 1024 / 1024),
                 heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
