@@ -1,0 +1,352 @@
+/* PO detail + PO line detail pages. Uses the theme variables from app/globals.css
+   so light and dark mode both work. */
+
+.pod-container {
+    width: 100%;
+    max-width: 1280px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    min-width: 0;
+}
+
+.pod-card {
+    position: relative;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+    padding: 1.25rem 1.5rem;
+    min-width: 0;
+}
+
+.pod-card-accent::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+}
+
+.pod-card-title {
+    margin: 0 0 1rem;
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.pod-card-title::before {
+    content: '';
+    width: 4px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--accent-primary);
+}
+
+/* Header */
+.pod-breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.9rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.pod-breadcrumb a {
+    color: var(--accent-primary);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.pod-breadcrumb a:hover {
+    text-decoration: underline;
+}
+
+.pod-breadcrumb-sep {
+    color: var(--text-muted);
+}
+
+.pod-breadcrumb-current {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.pod-header-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.pod-header-main {
+    min-width: 0;
+    flex: 1 1 420px;
+}
+
+.pod-title {
+    margin: 0 0 0.5rem;
+    font-size: 1.55rem;
+    font-weight: 800;
+    line-height: 1.25;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.pod-subtitle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.pod-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--accent-glow);
+    background: var(--accent-soft);
+    color: var(--accent-primary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    font-family: inherit;
+    letter-spacing: 0.02em;
+}
+
+button.pod-chip {
+    cursor: pointer;
+}
+
+button.pod-chip:hover {
+    border-color: var(--accent-primary);
+}
+
+.pod-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.pod-header-actions .po-erp-status {
+    min-height: 30px;
+    padding: 0.2rem 0.75rem;
+    font-size: 0.78rem;
+    border-radius: 999px;
+}
+
+.pod-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.9rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--accent-primary);
+    background: var(--accent-soft);
+    color: var(--accent-primary);
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.pod-btn:hover {
+    background: var(--accent-primary);
+    color: var(--accent-on-primary);
+}
+
+/* KPI tiles */
+.pod-stats {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.pod-stats-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pod-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.9rem 1rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    min-width: 0;
+}
+
+.pod-stat-label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.pod-stat-value {
+    font-size: 1.45rem;
+    font-weight: 800;
+    line-height: 1.15;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    word-break: break-word;
+}
+
+.pod-stat-unit {
+    margin-left: 0.3rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.pod-stat-hint {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+}
+
+.pod-stat-accent {
+    border-color: var(--accent-glow);
+    background: var(--accent-soft);
+}
+
+.pod-stat-accent .pod-stat-value {
+    color: var(--accent-primary);
+}
+
+/* Definition grid */
+.pod-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.25rem;
+    align-items: start;
+}
+
+.pod-dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem 1.5rem;
+    margin: 0;
+}
+
+.pod-dl > div {
+    min-width: 0;
+}
+
+.pod-dl dt {
+    margin: 0 0 0.25rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.pod-dl dd {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.pod-muted {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+/* Compact tables */
+.pod-table-wrap {
+    margin-top: 1.25rem;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    overflow-x: auto;
+}
+
+.pod-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.pod-table th {
+    padding: 0.6rem 0.9rem;
+    text-align: left;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    background: var(--bg-main);
+    border-bottom: 1px solid var(--border-light);
+}
+
+.pod-table td {
+    padding: 0.6rem 0.9rem;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-light);
+    font-variant-numeric: tabular-nums;
+}
+
+.pod-table tr:last-child td {
+    border-bottom: none;
+}
+
+.pod-table .pod-num {
+    text-align: right;
+}
+
+.pod-state {
+    padding: 2.5rem 1rem;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+}
+
+.pod-card .po-lines-wrap {
+    padding: 0;
+    background: transparent;
+}
+
+@media (max-width: 1280px) {
+    .pod-stats {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .pod-grid-2 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .pod-stats-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .pod-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .pod-card {
+        padding: 1rem;
+    }
+    .pod-title {
+        font-size: 1.25rem;
+    }
+}

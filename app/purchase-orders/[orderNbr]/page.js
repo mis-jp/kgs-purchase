@@ -1,17 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
 import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PoLinesTable from "@/components/PoLinesTable";
-import { formatWeightKg } from "@/lib/item-dimensions";
+import { Breadcrumb, Card, DASH, DefGrid, Stat, StatusPill } from "@/components/PoDetailParts";
+import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
 import { calcOrderWeightKg, pickOrderAnnotation } from "@/lib/po-metrics";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
 import "@/styles/inventory-detail.css";
+import "@/styles/po-detail.css";
 
 const LOGISTICS_FIELDS = [
     ["containerNumber", "Container"],
@@ -27,7 +28,7 @@ function fmt(n) {
 }
 
 function fmtDate(d) {
-    if (!d) return "\u2014";
+    if (!d) return "";
     const raw = String(d).trim();
     if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10).replace(/-/g, "/");
     const date = new Date(raw);
@@ -50,6 +51,18 @@ function toList(raw) {
         }
     }
     return s ? [s] : [];
+}
+
+function branchesOf(lines) {
+    const seen = new Set();
+    const out = [];
+    for (const l of lines || []) {
+        const id = String(l?.branchId || l?.warehouseId || "").trim();
+        if (!id || seen.has(id.toUpperCase())) continue;
+        seen.add(id.toUpperCase());
+        out.push(id);
+    }
+    return out.join(", ");
 }
 
 export default function PurchaseOrderDetailPage() {
@@ -131,63 +144,106 @@ export default function PurchaseOrderDetailPage() {
     const lines = po?.lines || [];
     const logistics = LOGISTICS_FIELDS.map(([key]) => toList(annotation?.[key]));
     if (!logistics[3].some(Boolean) && po?.receiptDate) logistics[3] = [String(po.receiptDate)];
-    const logisticsRows = Math.max(0, ...logistics.map((l) => l.length));
+    const logisticsRows = Math.max(0, ...logistics.map((l) => l.filter(Boolean).length ? l.length : 0));
     const totalWeight = calcOrderWeightKg(lines, lookupDim);
+    let totalCbm = null;
+    for (const l of lines) {
+        const d = lookupDim(l.inventoryId);
+        const c = calcTotalCbm({
+            length_m: d?.length_m, height_m: d?.height_m, width_m: d?.width_m,
+            cbm: d?.cbm, pcs_per_box: d?.pcs_per_box, qty: l.qty,
+        });
+        if (c != null && Number.isFinite(Number(c))) totalCbm = (totalCbm ?? 0) + Number(c);
+    }
+    const totalQty = lines.reduce((s, l) => s + (Number(l.qty) || 0), 0);
 
     return (
         <div className="po-root">
             <main className="po-main">
-                <p style={{ marginBottom: "1rem" }}>
-                    <Link href="/purchase-orders">{"\u2190 Purchase Orders"}</Link>
-                </p>
-                <div className="db-page-title">
-                    <h1>Purchase Order {orderNbr || ""}</h1>
-                </div>
-
-                {loading ? (
-                    <p className="si-loading-cell">{"Loading purchase order\u2026"}</p>
-                ) : error ? (
-                    <p className="si-empty-cell" role="alert">{error}</p>
-                ) : !po ? (
-                    <p className="si-empty-cell">Purchase order {orderNbr} was not found, or your branch access does not include it.</p>
-                ) : (
-                    <>
-                        <div className="db-table-wrap po-table-wrap" style={{ marginBottom: "1.5rem" }}>
-                            <table className="db-table po-table">
-                                <tbody>
-                                    <tr><th>Order #</th><td>{po.orderNbr}</td><th>Status</th><td>{po.status || "\u2014"}</td></tr>
-                                    <tr><th>Vendor ID</th><td>{po.vendorId || "\u2014"}</td><th>Vendor Name</th><td>{po.vendorName || "\u2014"}</td></tr>
-                                    <tr><th>PO Date</th><td>{fmtDate(po.date)}</td><th>ETD (Promised On)</th><td>{fmtDate(po.promisedDate || annotation?.etd)}</td></tr>
-                                    <tr><th>Origin</th><td>{annotation?.origin || "\u2014"}</td><th>Amount</th><td>{"\u20b1"}{fmt(po.totalAmount)}</td></tr>
-                                    <tr><th>Total Weight</th><td colSpan={3}>{totalWeight == null ? "\u2014" : `${formatWeightKg(totalWeight)} kg`}</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {logisticsRows > 0 && (
-                            <div className="db-table-wrap po-table-wrap" style={{ marginBottom: "1.5rem" }}>
-                                <table className="db-table po-table">
-                                    <thead>
-                                        <tr>{LOGISTICS_FIELDS.map(([key, label]) => <th key={key}>{label}</th>)}</tr>
-                                    </thead>
-                                    <tbody>
-                                        {Array.from({ length: logisticsRows }, (_, i) => (
-                                            <tr key={i}>
-                                                {LOGISTICS_FIELDS.map(([key], f) => {
-                                                    const v = logistics[f][i] || "";
-                                                    const isDate = key === "shipOutDate" || key === "eta" || key === "receivedDate";
-                                                    return <td key={key}>{v ? (isDate ? fmtDate(v) : v) : "\u2014"}</td>;
-                                                })}
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                <div className="pod-container">
+                    <Card accent>
+                        <Breadcrumb crumbs={[
+                            { label: "\u2190 Purchase Orders", href: "/purchase-orders" },
+                            { label: `PO ${orderNbr}` },
+                        ]} />
+                        <div className="pod-header-row">
+                            <div className="pod-header-main">
+                                <h1 className="pod-title">{po?.vendorName || po?.vendorId || `PO ${orderNbr}`}</h1>
+                                <div className="pod-subtitle">
+                                    <span className="pod-chip">PO {orderNbr}</span>
+                                    {po?.vendorId && <span>{po.vendorId}</span>}
+                                    {po?.date && <span>{"\u00b7"} {fmtDate(po.date)}</span>}
+                                </div>
                             </div>
-                        )}
+                            <div className="pod-header-actions">
+                                <StatusPill status={po?.status} />
+                            </div>
+                        </div>
+                    </Card>
 
-                        <PoLinesTable lines={lines} lookupDim={lookupDim} onItemClick={setSelectedId} orderNbr={po.orderNbr} />
-                    </>
-                )}
+                    {loading ? (
+                        <Card><p className="pod-state">{"Loading purchase order\u2026"}</p></Card>
+                    ) : error ? (
+                        <Card><p className="pod-state" role="alert">{error}</p></Card>
+                    ) : !po ? (
+                        <Card><p className="pod-state">Purchase order {orderNbr} was not found, or your branch access does not include it.</p></Card>
+                    ) : (
+                        <>
+                            <div className="pod-stats">
+                                <Stat label="Lines" value={String(lines.length)} />
+                                <Stat label="Total quantity" value={totalQty.toLocaleString()} />
+                                <Stat label="Total CBM" value={totalCbm == null ? "" : formatCbm(totalCbm, 4)} hint="Set dimensions in Stock Items" />
+                                <Stat label="Total weight" value={totalWeight == null ? "" : formatWeightKg(totalWeight)} unit="kg" hint="Set KG in Stock Items" />
+                                <Stat label="ETD" value={fmtDate(po.promisedDate || annotation?.etd)} />
+                                <Stat label="Amount" value={`\u20b1${fmt(po.totalAmount)}`} accent />
+                            </div>
+
+                            <div className="pod-grid-2">
+                                <Card title="Purchase order">
+                                    <DefGrid items={[
+                                        { label: "Order #", value: po.orderNbr },
+                                        { label: "Status", value: po.status ? <StatusPill status={po.status} /> : "" },
+                                        { label: "Vendor ID", value: po.vendorId },
+                                        { label: "Vendor name", value: po.vendorName },
+                                        { label: "PO date", value: fmtDate(po.date) },
+                                        { label: "ETD (Promised On)", value: fmtDate(po.promisedDate || annotation?.etd) },
+                                        { label: "Origin", value: annotation?.origin },
+                                        { label: "Branch / Warehouse", value: branchesOf(lines) },
+                                    ]} />
+                                </Card>
+
+                                <Card title="Logistics">
+                                    {logisticsRows === 0 ? (
+                                        <p className="pod-state">No container or shipping details recorded yet.</p>
+                                    ) : (
+                                        <div className="pod-table-wrap" style={{ marginTop: 0 }}>
+                                            <table className="pod-table">
+                                                <thead>
+                                                    <tr>{LOGISTICS_FIELDS.map(([key, label]) => <th key={key}>{label}</th>)}</tr>
+                                                </thead>
+                                                <tbody>
+                                                    {Array.from({ length: logisticsRows }, (_, i) => (
+                                                        <tr key={i}>
+                                                            {LOGISTICS_FIELDS.map(([key], f) => {
+                                                                const v = logistics[f][i] || "";
+                                                                const isDate = key === "shipOutDate" || key === "eta" || key === "receivedDate";
+                                                                return <td key={key}>{v ? (isDate ? fmtDate(v) : v) : <span className="pod-muted">{DASH}</span>}</td>;
+                                                            })}
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </Card>
+                            </div>
+
+                            <Card title={`Items (${lines.length})`}>
+                                <PoLinesTable lines={lines} lookupDim={lookupDim} onItemClick={setSelectedId} orderNbr={po.orderNbr} />
+                            </Card>
+                        </>
+                    )}
+                </div>
             </main>
 
             {selectedId && (
