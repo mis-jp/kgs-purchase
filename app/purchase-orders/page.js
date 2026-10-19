@@ -6,6 +6,7 @@ import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import Link from "next/link";
 import { isEtdBeyondContainer, poDetailHref } from "@/lib/po-metrics";
+import { formatWeightKg } from "@/lib/item-dimensions";
 import PoLinesTable from "@/components/PoLinesTable";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
@@ -83,6 +84,13 @@ function poStatusClass(status) {
     if (s === "completed") return "po-status-completed";
     if (s === "cancelled" || s === "canceled") return "po-status-cancelled";
     return "po-status-default";
+}
+
+/** PO total weight label ("1,234.5 kg"); empty when no line has KG. */
+function poWeightLabel(po) {
+    const kg = po?.totalWeightKg;
+    if (kg == null || !Number.isFinite(Number(kg))) return "";
+    return `${formatWeightKg(kg)} kg`;
 }
 
 function fmt(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -462,6 +470,7 @@ const EMPTY_COLUMN_FILTERS = {
     receivedDate: "",
     remarks: "",
     userStatus: "",
+    totalWeight: "",
     totalAmount: "",
 };
 
@@ -480,6 +489,7 @@ const COLUMN_FILTER_META = [
     { key: "receivedDate", label: "Received" },
     { key: "remarks", label: "Remarks" },
     { key: "userStatus", label: "User Status" },
+    { key: "totalWeight", label: "Weight" },
     { key: "totalAmount", label: "Amount" },
 ];
 
@@ -529,6 +539,8 @@ function poRowMatchesFilters(o, {
     if (f.userStatus && !userStatusList(ui.userStatus).includes(f.userStatus)) return false;
     if (overdueShipOutFilter && !overdueNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
     if (etdBeyondFilter && !etdNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
+    if (f.totalWeight && !textIncludes(poWeightLabel(o), f.totalWeight)
+        && !textIncludes(String(o.totalWeightKg ?? ""), f.totalWeight)) return false;
     if (f.totalAmount && !textIncludes(String(o.totalAmount ?? ""), f.totalAmount)
         && !textIncludes(fmt(o.totalAmount), f.totalAmount)) return false;
     return true;
@@ -1235,6 +1247,7 @@ export default function PurchaseOrdersPage() {
         debColumnFilters.eta,
         debColumnFilters.receivedDate,
         debColumnFilters.remarks,
+        debColumnFilters.totalWeight,
         debColumnFilters.totalAmount,
     ]);
 
@@ -1331,6 +1344,7 @@ export default function PurchaseOrdersPage() {
                 || col.eta
                 || col.receivedDate
                 || col.remarks
+                || col.totalWeight
                 || col.totalAmount
             );
             const pageSize = hasClientOnlyColumnFilters ? 100 : PAGE_SIZE;
@@ -1638,7 +1652,7 @@ export default function PurchaseOrdersPage() {
             }));
 
             const lines = [
-                "Order Nbr,Vendor ID,Vendor Name,Status,PO Date,ETD,Received Date,Total Amount",
+                "Order Nbr,Vendor ID,Vendor Name,Status,PO Date,ETD,Received Date,Total Weight (kg),Total Amount",
                 ...rows.map((po) => [
                     csvCell(po.orderNbr),
                     csvCell(po.vendorId),
@@ -1647,6 +1661,7 @@ export default function PurchaseOrdersPage() {
                     csvDate(po.date),
                     csvDate(po.promisedDate),
                     csvDate(po.receiptDate),
+                    po.totalWeightKg == null ? "" : Number(Number(po.totalWeightKg).toFixed(2)),
                     po.totalAmount ?? "",
                 ].join(",")),
             ];
@@ -1701,6 +1716,7 @@ export default function PurchaseOrdersPage() {
             || f.eta
             || f.receivedDate
             || f.remarks
+            || f.totalWeight
             || f.totalAmount
         );
     }, [columnFilters]);
@@ -1924,6 +1940,7 @@ export default function PurchaseOrdersPage() {
                                 <PoColHeader label="Received" className="po-col-received" />
                                 <PoColHeader label="Remarks" className="po-col-remarks" />
                                 <PoColHeader label="User Status" className="po-col-user-status" />
+                                <PoColHeader label="Weight" className="po-col-weight" />
                                 <PoColHeader label="Amount" className="po-col-amount" />
                             </tr>
                             <tr className="po-head-filters">
@@ -2030,6 +2047,13 @@ export default function PurchaseOrdersPage() {
                                     onChange={(v) => setColumnFilter("userStatus", v)}
                                 />
                                 <ColumnFilterCell
+                                    filterKey="totalWeight"
+                                    className="po-col-weight"
+                                    value={columnFilters.totalWeight}
+                                    onChange={(v) => setColumnFilter("totalWeight", v)}
+                                    placeholder="Weight"
+                                />
+                                <ColumnFilterCell
                                     filterKey="totalAmount"
                                     className="po-col-amount"
                                     value={columnFilters.totalAmount}
@@ -2040,14 +2064,14 @@ export default function PurchaseOrdersPage() {
                         </thead>
                         <tbody>
                             {loading && orders.length === 0 ? (
-                                <tr><td colSpan={16} className="si-loading-cell">
+                                <tr><td colSpan={17} className="si-loading-cell">
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '4rem 0' }}>
                                         <div className="db-spinner db-spinner-lg"></div>
                                         <span style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>Fetching orders...</span>
                                     </div>
                                 </td></tr>
                             ) : displayedOrders.length === 0 ? (
-                                <tr><td colSpan={16} className="si-empty-cell" style={{ padding: '4rem 0' }}>
+                                <tr><td colSpan={17} className="si-empty-cell" style={{ padding: '4rem 0' }}>
                                     {etdBeyondFilter && overdueShipOutFilter
                                         ? "No purchase orders match both dashboards."
                                         : etdBeyondFilter
@@ -2177,6 +2201,9 @@ export default function PurchaseOrdersPage() {
                                                     ))}
                                                 </div>
                                             </td>
+                                            <td className="po-col-weight po-weight-td" title={po.totalWeightKg == null ? "No line has KG set" : "Sum of line box KG \u00d7 quantity"}>
+                                                {poWeightLabel(po) || "\u2014"}
+                                            </td>
                                             <td className="po-amount-td" onClick={(e) => e.stopPropagation()}>
                                                 <div className="po-amount-stack">
                                                     {orderHasNoAcumaticaCost(po) ? (
@@ -2196,7 +2223,7 @@ export default function PurchaseOrdersPage() {
                                         </tr>
                                         {isOpen && (
                                             <tr className="po-lines-row">
-                                                <td colSpan={16}>
+                                                <td colSpan={17}>
                                                     <div style={{ textAlign: 'right', marginBottom: '0.5rem' }}>
                                                         <Link href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                                                             Open whole PO {po.orderNbr} in a new tab

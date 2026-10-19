@@ -22,6 +22,7 @@ import { SALES_LOOKBACK_DAYS, SQL_NET_QTY, SQL_NET_AMOUNT, SQL_GROSS_QTY, netQty
 import { normalizeReplenishmentWindow } from "@/lib/replenishment-window.js";
 import { TARGET_DAYS_OF_COVER } from "@/lib/replenishment-insights.js";
 import { getCached, invalidateCache } from "@/lib/server-cache";
+import { calcOrderWeightKg } from "@/lib/po-metrics.js";
 import { cacheKeys, invalidateFor, runAfterCommit } from "@/lib/cache-invalidation";
 import { FORECAST_ALL_BRANCH, forecastBranchKey, forecastSoldQty, listMonthsInRange, monthInvoiceCoverageComplete, normalizeInvKey } from "@/lib/forecast-generator.js";
 import {
@@ -794,11 +795,33 @@ export const MySqlService = {
                 }
             }
 
-            const ordersWithLines = rows.map(order => ({
-                ...order,
-                orderType: "Normal",
-                lines: linesByOrder.get(String(order.orderNbr || "").trim()) || [],
-            }));
+            // PO total weight = sum of line box KG x qty (same rule as Stock Items and the
+            // nested Weight column). One batched item_dimensions lookup per page.
+            let dimsById = {};
+            const lineItemIds = [...new Set(
+                [...linesByOrder.values()].flat().map((l) => String(l.inventoryId || "").trim()).filter(Boolean)
+            )];
+            if (lineItemIds.length) {
+                try {
+                    dimsById = await this.getItemDimensionsBatch(lineItemIds);
+                } catch (dimErr) {
+                    console.error("[MySQL getPurchaseOrders] weight dimensions skipped:", dimErr.message);
+                }
+            }
+            const lookupDim = (id) => {
+                const k = String(id || "").trim();
+                return dimsById[k] || dimsById[k.toUpperCase()] || null;
+            };
+
+            const ordersWithLines = rows.map(order => {
+                const lines = linesByOrder.get(String(order.orderNbr || "").trim()) || [];
+                return {
+                    ...order,
+                    orderType: "Normal",
+                    lines,
+                    totalWeightKg: calcOrderWeightKg(lines, lookupDim),
+                };
+            });
 
             return {
                 orders: ordersWithLines,

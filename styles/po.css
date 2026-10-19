@@ -1568,3 +1568,16 @@ input.po-select-box[type="date"] {
     background: rgba(59, 130, 246, 0.08);
     color: var(--text-primary);
 }
+
+/* Main PO list: total weight column */
+.po-col-weight {
+    text-align: right;
+    white-space: nowrap;
+    min-width: 110px;
+}
+
+.po-weight-td {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--text-primary);
+}
