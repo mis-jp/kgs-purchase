@@ -1558,3 +1558,13 @@ input.po-select-box[type="date"] {
     border-color: rgba(239, 68, 68, 0.45);
     color: #f87171;
 }
+
+/* PO line rows that open the single-line page in a new tab */
+.po-lines-table tr.po-line-clickable {
+    cursor: pointer;
+}
+
+.po-lines-table tr.po-line-clickable:hover td {
+    background: rgba(59, 130, 246, 0.08);
+    color: var(--text-primary);
+}

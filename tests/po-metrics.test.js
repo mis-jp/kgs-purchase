@@ -9,6 +9,11 @@ import {
   poDetailUrl,
   filterAnnotationsForOrder,
   pickOrderAnnotation,
+  poLineKey,
+  findPoLine,
+  poLineHref,
+  poLineUrl,
+  isInteractiveClickTarget,
 } from '../lib/po-metrics.js';
 
 test('calcLineWeightKg multiplies box KG by quantity like Stock Items', () => {
@@ -68,4 +73,35 @@ test('pickOrderAnnotation prefers the bare order number key', () => {
   assert.deepEqual(pickOrderAnnotation({ 'Normal-PO1': { a: 1 }, PO1: { b: 2 } }, 'PO1'), { b: 2 });
   assert.deepEqual(pickOrderAnnotation({ 'Normal-PO1': { a: 1 } }, 'PO1'), { a: 1 });
   assert.deepEqual(pickOrderAnnotation({ PO2: {} }, 'PO1'), {});
+});
+
+test('poLineKey uses lineNbr and falls back to position', () => {
+  assert.equal(poLineKey({ lineNbr: 3 }, 0), '3');
+  assert.equal(poLineKey({ lineNbr: null }, 1), 'pos-2');
+  assert.equal(poLineKey({}, 0), 'pos-1');
+});
+
+test('findPoLine tells apart the same item on two lines', () => {
+  const lines = [
+    { lineNbr: 1, inventoryId: 'A', qty: 5 },
+    { lineNbr: 2, inventoryId: 'A', qty: 9 },
+    { inventoryId: 'B', qty: 1 },
+  ];
+  assert.equal(findPoLine(lines, '2').line.qty, 9);
+  assert.equal(findPoLine(lines, '1').line.qty, 5);
+  assert.equal(findPoLine(lines, 'pos-3').line.inventoryId, 'B');
+  assert.equal(findPoLine(lines, '7'), null);
+  assert.equal(findPoLine(lines, ''), null);
+});
+
+test('poLineHref and poLineUrl build the line route', () => {
+  assert.equal(poLineHref('PO1', '2'), '/purchase-orders/PO1/lines/2');
+  assert.equal(poLineUrl('PO1', 'pos-1', '/kgs-purchase'), '/kgs-purchase/purchase-orders/PO1/lines/pos-1');
+  assert.equal(poLineHref('', '2'), '');
+});
+
+test('isInteractiveClickTarget checks closest()', () => {
+  assert.equal(isInteractiveClickTarget({ closest: () => ({}) }), true);
+  assert.equal(isInteractiveClickTarget({ closest: () => null }), false);
+  assert.equal(isInteractiveClickTarget(null), false);
 });

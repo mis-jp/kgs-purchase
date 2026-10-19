@@ -2,10 +2,11 @@
 
 import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
+import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import Link from "next/link";
-import { isEtdBeyondContainer, poDetailHref, poDetailUrl } from "@/lib/po-metrics";
-import { getBasePath } from "@/lib/base-path";
+import { isEtdBeyondContainer, poDetailHref } from "@/lib/po-metrics";
+import PoLinesTable from "@/components/PoLinesTable";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
@@ -14,17 +15,6 @@ import "@/styles/po.css";
 import "@/styles/inventory-detail.css";
 
 const PAGE_SIZE = 10;
-
-/** Clicks on these inside a PO row keep their own behavior (no new tab). */
-const ROW_INTERACTIVE_SELECTOR = "a, button, input, select, textarea, label, option, [role='button'], [contenteditable='true']";
-
-/** Row click: open that single PO's detail page in a new browser tab. */
-function openPoInNewTab(e, orderNbr) {
-    const target = e?.target;
-    if (target && typeof target.closest === "function" && target.closest(ROW_INTERACTIVE_SELECTOR)) return;
-    const url = poDetailUrl(orderNbr, getBasePath());
-    if (url) window.open(url, "_blank", "noopener,noreferrer");
-}
 
 /* ── SVG Icons ─────────────────────────────────────────── */
 const IconSearch = () => (
@@ -970,6 +960,9 @@ export default function PurchaseOrdersPage() {
     const [branchOptions, setBranchOptions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [expanded, setExpanded] = useState({}); // orderNbr -> bool
+    const [selectedId, setSelectedId] = useState(null);
+    const [lineDimensions, setLineDimensions] = useState({}); // inventoryId -> dims
     const [userInputs, setUserInputs] = useState({}); // key -> { eta, userStatus }
     const [statusGuideTab, setStatusGuideTab] = useState(USER_STATUS_OPTIONS[0]);
     const [userStatusTableFilter, setUserStatusTableFilter] = useState("");
@@ -1492,8 +1485,41 @@ export default function PurchaseOrdersPage() {
         };
     }, []);
 
+    // Load packaging dimensions for line Total CBM
+    useEffect(() => {
+        const ids = [
+            ...new Set(
+                orders.flatMap((o) => (o.lines || []).map((l) => String(l.inventoryId || "").trim()).filter(Boolean))
+            ),
+        ];
+        if (!ids.length) return;
+        let active = true;
+        (async () => {
+            try {
+                const res = await fetchWithAuth(
+                    `/api/stock-items/dimensions?ids=${ids.map(encodeURIComponent).join(",")}`
+                );
+                if (!res.ok || !active) return;
+                const data = await res.json();
+                if (active && data.dimensions) {
+                    setLineDimensions((prev) => ({ ...prev, ...data.dimensions }));
+                }
+            } catch (err) {
+                console.error("Failed to load item dimensions", err);
+            }
+        })();
+        return () => {
+            active = false;
+        };
+    }, [orders]);
 
+    const toggleExpand = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
 
+    const lookupLineDim = (inventoryId) => {
+        if (!inventoryId) return null;
+        const id = String(inventoryId).trim();
+        return lineDimensions[id] || lineDimensions[id.toUpperCase()] || null;
+    };
 
     const rangeDayCount = useMemo(
         () => inclusiveDayCount(startDate, endDate),
@@ -2036,6 +2062,7 @@ export default function PurchaseOrdersPage() {
                                 </td></tr>
                             ) : displayedOrders.map(po => {
                                 const key = poAnnotationKey(po.orderNbr);
+                                const isOpen = !!expanded[key];
                                 const ui = getPoUserInputs(userInputs, po.orderNbr, po.orderType);
                                 const etdValue = po.promisedDate || ui.etd;
                                 const logistics = getLogisticsEntries(ui, po.receiptDate);
@@ -2043,10 +2070,10 @@ export default function PurchaseOrdersPage() {
                                 const onLogisticsRemove = (i) => handleLogisticsRemove(key, i, po.receiptDate);
                                 return (
                                     <Fragment key={key}>
-                                        <tr className="db-clickable-row" title={`Open ${po.orderNbr} in a new tab`} onClick={(e) => openPoInNewTab(e, po.orderNbr)}>
+                                        <tr className={`db-clickable-row ${isOpen ? "po-row-expanded" : ""}`} onClick={() => toggleExpand(key)}>
                                             <td>
-                                                <span className="po-expand-icon" aria-hidden="true">
-                                                    <IconChevronRight />
+                                                <span className={`po-expand-icon ${isOpen ? "po-expand-open" : ""}`}>
+                                                    <IconChevronDown />
                                                 </span>
                                             </td>
                                             <td className="po-col-branch">
@@ -2167,6 +2194,18 @@ export default function PurchaseOrdersPage() {
                                                 </div>
                                             </td>
                                         </tr>
+                                        {isOpen && (
+                                            <tr className="po-lines-row">
+                                                <td colSpan={16}>
+                                                    <div style={{ textAlign: 'right', marginBottom: '0.5rem' }}>
+                                                        <Link href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                                            Open whole PO {po.orderNbr} in a new tab
+                                                        </Link>
+                                                    </div>
+                                                    <PoLinesTable lines={po.lines} lookupDim={lookupLineDim} onItemClick={setSelectedId} orderNbr={po.orderNbr} />
+                                                </td>
+                                            </tr>
+                                        )}
                                     </Fragment>
                                 );
                             })}
@@ -2187,6 +2226,31 @@ export default function PurchaseOrdersPage() {
                 )}
             </main>
 
+            {selectedId && (
+                <InventoryDetailModal
+                    inventoryId={selectedId}
+                    onClose={() => setSelectedId(null)}
+                    onDimensionsSaved={(dims) => {
+                        if (!dims) return;
+                        const id = String(dims.inventoryId || selectedId || "").trim();
+                        if (!id) return;
+                        const entry = {
+                            inventoryId: id,
+                            pcs_per_box: dims.pcs_per_box ?? null,
+                            length_m: dims.length_m ?? null,
+                            height_m: dims.height_m ?? null,
+                            width_m: dims.width_m ?? null,
+                            weight_kg: dims.weight_kg ?? null,
+                            cbm: dims.cbm ?? null,
+                        };
+                        setLineDimensions((prev) => ({
+                            ...prev,
+                            [id]: entry,
+                            [id.toUpperCase()]: entry,
+                        }));
+                    }}
+                />
+            )}
         </div>
     );
 }

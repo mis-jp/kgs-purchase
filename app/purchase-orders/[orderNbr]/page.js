@@ -185,7 +185,7 @@ export default function PurchaseOrderDetailPage() {
                             </div>
                         )}
 
-                        <PoLinesTable lines={lines} lookupDim={lookupDim} onItemClick={setSelectedId} />
+                        <PoLinesTable lines={lines} lookupDim={lookupDim} onItemClick={setSelectedId} orderNbr={po.orderNbr} />
                     </>
                 )}
             </main>

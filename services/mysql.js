@@ -780,6 +780,7 @@ export const MySqlService = {
                     const qty = Number(line.qty) || 0;
                     const receivedQty = Number(line.receivedQty) || 0;
                     linesByOrder.get(key).push({
+                        lineNbr: line.lineNbr ?? null,
                         inventoryId: line.inventoryId,
                         description: line.description,
                         qty,

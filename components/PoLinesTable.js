@@ -1,7 +1,8 @@
 "use client";
 
 import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
-import { calcLineWeightKg } from "@/lib/po-metrics";
+import { getBasePath } from "@/lib/base-path";
+import { calcLineWeightKg, isInteractiveClickTarget, poLineKey, poLineUrl } from "@/lib/po-metrics";
 
 function fmt(n) {
     return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -9,10 +10,17 @@ function fmt(n) {
 
 /**
  * PO item lines (Item ID, Description, Quantity, Total CBM, Weight, Ext. Cost).
- * Same markup the Purchase Orders list used for its inline expanded panel.
+ * With `orderNbr`, clicking a line (outside the Item ID button) opens that
+ * single line in a new browser tab. The Item ID keeps opening the item popup.
  */
-export default function PoLinesTable({ lines, lookupDim, onItemClick }) {
+export default function PoLinesTable({ lines, lookupDim, onItemClick, orderNbr }) {
     const rows = Array.isArray(lines) ? lines : [];
+    const openLine = (e, key) => {
+        e.stopPropagation();
+        if (isInteractiveClickTarget(e.target)) return;
+        const url = poLineUrl(orderNbr, key, getBasePath());
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
+    };
     return (
         <div className="po-lines-wrap">
             <table className="po-lines-table">
@@ -28,6 +36,7 @@ export default function PoLinesTable({ lines, lookupDim, onItemClick }) {
                 </thead>
                 <tbody>
                     {rows.length > 0 ? rows.map((line, i) => {
+                        const key = poLineKey(line, i);
                         const dim = lookupDim?.(line.inventoryId) || null;
                         const totalCbm = calcTotalCbm({
                             length_m: dim?.length_m,
@@ -38,16 +47,23 @@ export default function PoLinesTable({ lines, lookupDim, onItemClick }) {
                             qty: line.qty,
                         });
                         const weight = calcLineWeightKg(dim, line.qty);
+                        const clickable = !!orderNbr;
                         return (
-                            <tr key={i}>
+                            <tr
+                                key={key}
+                                className={clickable ? "po-line-clickable" : undefined}
+                                title={clickable ? "Open this line in a new tab" : undefined}
+                                onClick={clickable ? (e) => openLine(e, key) : undefined}
+                            >
                                 <td>
                                     {onItemClick ? (
                                         <span
                                             className="db-inv-id si-clickable-id"
                                             role="button"
                                             tabIndex={0}
-                                            onClick={() => onItemClick(line.inventoryId)}
-                                            onKeyDown={(e) => { if (e.key === "Enter") onItemClick(line.inventoryId); }}
+                                            title="Open item details"
+                                            onClick={(e) => { e.stopPropagation(); onItemClick(line.inventoryId); }}
+                                            onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onItemClick(line.inventoryId); } }}
                                         >
                                             {line.inventoryId}
                                         </span>
