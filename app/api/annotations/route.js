@@ -1,6 +1,7 @@
 import { MySqlService } from "@/services/mysql";
 import { NextResponse } from "next/server";
 import { logUserActivity, summarizeActivityDetail } from "@/lib/activity-log";
+import { filterAnnotationsForOrder } from "@/lib/po-metrics";
 
 /**
  * Handle persistent user annotations (ETAs, Statuses, Lead Times)
@@ -15,6 +16,11 @@ export async function GET(req) {
         }
 
         const annotations = await MySqlService.getAnnotations(moduleName);
+        // Optional: scope to one PO (detail page) so other orders' entries are not sent.
+        const orderNbr = (searchParams.get("orderNbr") || "").trim();
+        if (orderNbr) {
+            return NextResponse.json(filterAnnotationsForOrder(annotations, orderNbr));
+        }
         return NextResponse.json(annotations);
     } catch (err) {
         console.error("[Annotations API GET Error]", err);

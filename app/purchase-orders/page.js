@@ -2,11 +2,10 @@
 
 import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
-import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import Link from "next/link";
-import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
-import { calcLineWeightKg, isEtdBeyondContainer, poDetailHref } from "@/lib/po-metrics";
+import { isEtdBeyondContainer, poDetailHref, poDetailUrl } from "@/lib/po-metrics";
+import { getBasePath } from "@/lib/base-path";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
@@ -15,6 +14,17 @@ import "@/styles/po.css";
 import "@/styles/inventory-detail.css";
 
 const PAGE_SIZE = 10;
+
+/** Clicks on these inside a PO row keep their own behavior (no new tab). */
+const ROW_INTERACTIVE_SELECTOR = "a, button, input, select, textarea, label, option, [role='button'], [contenteditable='true']";
+
+/** Row click: open that single PO's detail page in a new browser tab. */
+function openPoInNewTab(e, orderNbr) {
+    const target = e?.target;
+    if (target && typeof target.closest === "function" && target.closest(ROW_INTERACTIVE_SELECTOR)) return;
+    const url = poDetailUrl(orderNbr, getBasePath());
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+}
 
 /* ── SVG Icons ─────────────────────────────────────────── */
 const IconSearch = () => (
@@ -960,9 +970,6 @@ export default function PurchaseOrdersPage() {
     const [branchOptions, setBranchOptions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [expanded, setExpanded] = useState({}); // orderNbr -> bool
-    const [selectedId, setSelectedId] = useState(null);
-    const [lineDimensions, setLineDimensions] = useState({}); // inventoryId -> dims
     const [userInputs, setUserInputs] = useState({}); // key -> { eta, userStatus }
     const [statusGuideTab, setStatusGuideTab] = useState(USER_STATUS_OPTIONS[0]);
     const [userStatusTableFilter, setUserStatusTableFilter] = useState("");
@@ -1485,41 +1492,8 @@ export default function PurchaseOrdersPage() {
         };
     }, []);
 
-    // Load packaging dimensions for line Total CBM
-    useEffect(() => {
-        const ids = [
-            ...new Set(
-                orders.flatMap((o) => (o.lines || []).map((l) => String(l.inventoryId || "").trim()).filter(Boolean))
-            ),
-        ];
-        if (!ids.length) return;
-        let active = true;
-        (async () => {
-            try {
-                const res = await fetchWithAuth(
-                    `/api/stock-items/dimensions?ids=${ids.map(encodeURIComponent).join(",")}`
-                );
-                if (!res.ok || !active) return;
-                const data = await res.json();
-                if (active && data.dimensions) {
-                    setLineDimensions((prev) => ({ ...prev, ...data.dimensions }));
-                }
-            } catch (err) {
-                console.error("Failed to load item dimensions", err);
-            }
-        })();
-        return () => {
-            active = false;
-        };
-    }, [orders]);
 
-    const toggleExpand = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
 
-    const lookupLineDim = (inventoryId) => {
-        if (!inventoryId) return null;
-        const id = String(inventoryId).trim();
-        return lineDimensions[id] || lineDimensions[id.toUpperCase()] || null;
-    };
 
     const rangeDayCount = useMemo(
         () => inclusiveDayCount(startDate, endDate),
@@ -2062,7 +2036,6 @@ export default function PurchaseOrdersPage() {
                                 </td></tr>
                             ) : displayedOrders.map(po => {
                                 const key = poAnnotationKey(po.orderNbr);
-                                const isOpen = !!expanded[key];
                                 const ui = getPoUserInputs(userInputs, po.orderNbr, po.orderType);
                                 const etdValue = po.promisedDate || ui.etd;
                                 const logistics = getLogisticsEntries(ui, po.receiptDate);
@@ -2070,10 +2043,10 @@ export default function PurchaseOrdersPage() {
                                 const onLogisticsRemove = (i) => handleLogisticsRemove(key, i, po.receiptDate);
                                 return (
                                     <Fragment key={key}>
-                                        <tr className={`db-clickable-row ${isOpen ? "po-row-expanded" : ""}`} onClick={() => toggleExpand(key)}>
+                                        <tr className="db-clickable-row" title={`Open ${po.orderNbr} in a new tab`} onClick={(e) => openPoInNewTab(e, po.orderNbr)}>
                                             <td>
-                                                <span className={`po-expand-icon ${isOpen ? "po-expand-open" : ""}`}>
-                                                    <IconChevronDown />
+                                                <span className="po-expand-icon" aria-hidden="true">
+                                                    <IconChevronRight />
                                                 </span>
                                             </td>
                                             <td className="po-col-branch">
@@ -2194,69 +2167,6 @@ export default function PurchaseOrdersPage() {
                                                 </div>
                                             </td>
                                         </tr>
-                                        {isOpen && (
-                                            <tr className="po-lines-row">
-                                                <td colSpan={16}>
-                                                    <div className="po-lines-wrap">
-                                                        <div style={{ textAlign: 'right', marginBottom: '0.5rem' }}>
-                                                            <Link href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                                                                Open PO {po.orderNbr} in a new tab
-                                                            </Link>
-                                                        </div>
-                                                        <table className="po-lines-table">
-                                                            <thead>
-                                                                <tr>
-                                                                    <th style={{ width: 180 }}>Item ID</th>
-                                                                    <th>Description</th>
-                                                                    <th style={{ textAlign: 'right', width: 120 }}>Quantity</th>
-                                                                    <th style={{ textAlign: 'right', width: 110 }}>Total CBM</th>
-                                                                    <th style={{ textAlign: 'right', width: 110 }}>Weight</th>
-                                                                    <th style={{ textAlign: 'right', width: 150 }}>Ext. Cost</th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody>
-                                                                {po.lines && po.lines.length > 0 ? po.lines.map((line, i) => {
-                                                                    const dim = lookupLineDim(line.inventoryId);
-                                                                    const totalCbm = calcTotalCbm({
-                                                                        length_m: dim?.length_m,
-                                                                        height_m: dim?.height_m,
-                                                                        width_m: dim?.width_m,
-                                                                        cbm: dim?.cbm,
-                                                                        pcs_per_box: dim?.pcs_per_box,
-                                                                        qty: line.qty,
-                                                                    });
-                                                                    return (
-                                                                    <tr key={i}>
-                                                                        <td>
-                                                                            <span 
-                                                                                className="db-inv-id si-clickable-id"
-                                                                                onClick={(e) => { e.stopPropagation(); setSelectedId(line.inventoryId); }}
-                                                                            >
-                                                                                {line.inventoryId}
-                                                                            </span>
-                                                                        </td>
-                                                                        <td style={{ color: 'var(--text-secondary)', fontWeight: '500' }}>{line.description}</td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)' }}>
-                                                                            {Number(line.qty).toLocaleString()} <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{line.uom}</span>
-                                                                        </td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }} title={dim ? "From L×H×W and PCS/BOX" : "Set packaging dimensions on the item"}>
-                                                                            {formatCbm(totalCbm, 4)}
-                                                                        </td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }} title={dim?.weight_kg != null ? "Box KG \u00d7 quantity (same as Stock Items Weight)" : "Set KG on the item"}>
-                                                                            {calcLineWeightKg(dim, line.qty) == null ? "\u2014" : `${formatWeightKg(calcLineWeightKg(dim, line.qty))} kg`}
-                                                                        </td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--accent-primary)' }}>₱{fmt(line.extCost)}</td>
-                                                                    </tr>
-                                                                    );
-                                                                }) : (
-                                                                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No line items found for this order.</td></tr>
-                                                                )}
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        )}
                                     </Fragment>
                                 );
                             })}
@@ -2277,31 +2187,6 @@ export default function PurchaseOrdersPage() {
                 )}
             </main>
 
-            {selectedId && (
-                <InventoryDetailModal
-                    inventoryId={selectedId}
-                    onClose={() => setSelectedId(null)}
-                    onDimensionsSaved={(dims) => {
-                        if (!dims) return;
-                        const id = String(dims.inventoryId || selectedId || "").trim();
-                        if (!id) return;
-                        const entry = {
-                            inventoryId: id,
-                            pcs_per_box: dims.pcs_per_box ?? null,
-                            length_m: dims.length_m ?? null,
-                            height_m: dims.height_m ?? null,
-                            width_m: dims.width_m ?? null,
-                            weight_kg: dims.weight_kg ?? null,
-                            cbm: dims.cbm ?? null,
-                        };
-                        setLineDimensions((prev) => ({
-                            ...prev,
-                            [id]: entry,
-                            [id.toUpperCase()]: entry,
-                        }));
-                    }}
-                />
-            )}
         </div>
     );
 }

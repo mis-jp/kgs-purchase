@@ -4,11 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { fetchWithAuth } from "@/lib/api-client";
-import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
-import { calcLineWeightKg, calcOrderWeightKg } from "@/lib/po-metrics";
+import InventoryDetailModal from "@/components/InventoryDetailModal";
+import PoLinesTable from "@/components/PoLinesTable";
+import { formatWeightKg } from "@/lib/item-dimensions";
+import { calcOrderWeightKg, pickOrderAnnotation } from "@/lib/po-metrics";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
+import "@/styles/inventory-detail.css";
 
 const LOGISTICS_FIELDS = [
     ["containerNumber", "Container"],
@@ -49,16 +52,6 @@ function toList(raw) {
     return s ? [s] : [];
 }
 
-/** Annotation for this PO only (keys are the bare order # or `${type}-${orderNbr}`). */
-function pickAnnotation(all, orderNbr) {
-    if (!all || !orderNbr) return {};
-    if (all[orderNbr]) return all[orderNbr];
-    for (const [k, v] of Object.entries(all)) {
-        if (k.endsWith(`-${orderNbr}`)) return v;
-    }
-    return {};
-}
-
 export default function PurchaseOrderDetailPage() {
     const params = useParams();
     const orderNbr = useMemo(() => {
@@ -75,6 +68,7 @@ export default function PurchaseOrderDetailPage() {
     const [dims, setDims] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [selectedId, setSelectedId] = useState(null);
 
     useEffect(() => {
         if (!orderNbr) return;
@@ -98,8 +92,9 @@ export default function PurchaseOrderDetailPage() {
                 setPo(match);
 
                 try {
-                    const aRes = await fetchWithAuth("/api/annotations?module=po");
-                    if (aRes.ok && active) setAnnotation(pickAnnotation(await aRes.json(), orderNbr));
+                    // Server returns only this PO's annotation entry.
+                    const aRes = await fetchWithAuth(`/api/annotations?module=po&orderNbr=${encodeURIComponent(orderNbr)}`);
+                    if (aRes.ok && active) setAnnotation(pickOrderAnnotation(await aRes.json(), orderNbr));
                 } catch (e) {
                     console.error("Failed to load PO annotations", e);
                 }
@@ -190,49 +185,23 @@ export default function PurchaseOrderDetailPage() {
                             </div>
                         )}
 
-                        <div className="po-lines-wrap">
-                            <table className="po-lines-table">
-                                <thead>
-                                    <tr>
-                                        <th style={{ width: 180 }}>Item ID</th>
-                                        <th>Description</th>
-                                        <th style={{ textAlign: "right", width: 120 }}>Quantity</th>
-                                        <th style={{ textAlign: "right", width: 110 }}>Total CBM</th>
-                                        <th style={{ textAlign: "right", width: 110 }}>Weight</th>
-                                        <th style={{ textAlign: "right", width: 150 }}>Ext. Cost</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {lines.length > 0 ? lines.map((line, i) => {
-                                        const dim = lookupDim(line.inventoryId);
-                                        const totalCbm = calcTotalCbm({
-                                            length_m: dim?.length_m,
-                                            height_m: dim?.height_m,
-                                            width_m: dim?.width_m,
-                                            cbm: dim?.cbm,
-                                            pcs_per_box: dim?.pcs_per_box,
-                                            qty: line.qty,
-                                        });
-                                        const weight = calcLineWeightKg(dim, line.qty);
-                                        return (
-                                            <tr key={i}>
-                                                <td><span className="db-inv-id">{line.inventoryId}</span></td>
-                                                <td>{line.description}</td>
-                                                <td style={{ textAlign: "right" }}>{Number(line.qty).toLocaleString()} {line.uom}</td>
-                                                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{formatCbm(totalCbm, 4)}</td>
-                                                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{weight == null ? "\u2014" : `${formatWeightKg(weight)} kg`}</td>
-                                                <td style={{ textAlign: "right" }}>{"\u20b1"}{fmt(line.extCost)}</td>
-                                            </tr>
-                                        );
-                                    }) : (
-                                        <tr><td colSpan={6} style={{ textAlign: "center", padding: "2rem" }}>No line items found for this order.</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
+                        <PoLinesTable lines={lines} lookupDim={lookupDim} onItemClick={setSelectedId} />
                     </>
                 )}
             </main>
+
+            {selectedId && (
+                <InventoryDetailModal
+                    inventoryId={selectedId}
+                    onClose={() => setSelectedId(null)}
+                    onDimensionsSaved={(saved) => {
+                        if (!saved) return;
+                        const id = String(saved.inventoryId || selectedId || "").trim();
+                        if (!id) return;
+                        setDims((prev) => ({ ...prev, [id]: saved, [id.toUpperCase()]: saved }));
+                    }}
+                />
+            )}
         </div>
     );
 }
