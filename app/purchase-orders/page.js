@@ -4,7 +4,9 @@ import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from "rea
 import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
-import { calcTotalCbm, formatCbm } from "@/lib/item-dimensions";
+import Link from "next/link";
+import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
+import { calcLineWeightKg, isEtdBeyondContainer, poDetailHref } from "@/lib/po-metrics";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
@@ -306,7 +308,7 @@ function collectOverdueShipOuts(userInputs, asOf = todayIso()) {
 }
 
 /**
- * Packing list: a container slot whose ETD (Promised On) is already past
+ * Packing list: a container slot whose ETD (Promised On) is today or later (not yet passed)
  * and that slot still has no Received date.
  */
 function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf = todayIso()) {
@@ -321,7 +323,7 @@ function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf
         const ui = getPoUserInputs(userInputs, nbr);
         const logistics = getLogisticsEntries(ui, receiptByOrder?.[nbr]);
         const etd = toDateKey(etdByOrder?.[nbr] || ui?.etd);
-        if (!etd || etd >= today) continue;
+        if (!etd || !isEtdBeyondContainer(etd, today)) continue;
         let hit = false;
         for (let i = 0; i < logistics.containerNumber.length; i++) {
             if (!isOpenArrivalUserStatus(logistics.userStatus[i])) continue;
@@ -914,21 +916,21 @@ function EtdBeyondContainerPanel({ containerCount, orderCount, filtering, onTogg
                 </div>
                 <div>
                     <h2 id="po-etd-beyond-title">ETD Beyond the Container</h2>
-                    <p>Packing list containers past their ETD.</p>
+                    <p>Packing list containers whose ETD has not passed yet.</p>
                 </div>
             </div>
             <div className="po-shipout-overdue-stats">
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{containerCount}</span>
-                    <span className="po-shipout-overdue-label">Containers past ETD</span>
+                    <span className="po-shipout-overdue-label">Containers with ETD not yet passed</span>
                 </div>
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{orderCount}</span>
-                    <span className="po-shipout-overdue-label">Orders with a container past ETD</span>
+                    <span className="po-shipout-overdue-label">Orders with a container whose ETD has not passed</span>
                 </div>
             </div>
             <p className="po-shipout-overdue-hint">
-                A container is counted when it has a container number, the ETD date is already past, and Received is still empty.
+                A container is counted when it has a container number, the ETD date is today or later (not yet passed), and Received is still empty.
             </p>
             <button
                 type="button"
@@ -1773,7 +1775,7 @@ export default function PurchaseOrdersPage() {
                             <IconInfo /> Module Guide
                         </h4>
                         <p className="po-info-text">
-                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container whose ETD has passed and still has no Received date.
+                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container whose ETD is today or later (not yet passed) and still has no Received date. Click an Order # to open that PO alone in a new tab.
                         </p>
                         <p className="po-info-text" style={{ marginTop: '0.75rem' }}>
                             Changes to Ship Out Date, ETA, Container #, Remarks, Origin, and User Status are saved to your account and backed up locally. Use the User Status Guide to review each status and filter the table.
@@ -2080,7 +2082,7 @@ export default function PurchaseOrdersPage() {
                                                 </span>
                                             </td>
                                             <td className="po-col-order">
-                                                <span className="db-inv-id" title={po.orderNbr}>{po.orderNbr}</span>
+                                                <Link className="db-inv-id" href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" title={`Open ${po.orderNbr} in a new tab`} onClick={(e) => e.stopPropagation()}>{po.orderNbr}</Link>
                                             </td>
                                             <td className="po-col-vendor-id">
                                                 <span className="po-vendor-id" title={po.vendorId || ""}>{po.vendorId || "—"}</span>
@@ -2196,6 +2198,11 @@ export default function PurchaseOrdersPage() {
                                             <tr className="po-lines-row">
                                                 <td colSpan={16}>
                                                     <div className="po-lines-wrap">
+                                                        <div style={{ textAlign: 'right', marginBottom: '0.5rem' }}>
+                                                            <Link href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                                                                Open PO {po.orderNbr} in a new tab
+                                                            </Link>
+                                                        </div>
                                                         <table className="po-lines-table">
                                                             <thead>
                                                                 <tr>
@@ -2203,6 +2210,7 @@ export default function PurchaseOrdersPage() {
                                                                     <th>Description</th>
                                                                     <th style={{ textAlign: 'right', width: 120 }}>Quantity</th>
                                                                     <th style={{ textAlign: 'right', width: 110 }}>Total CBM</th>
+                                                                    <th style={{ textAlign: 'right', width: 110 }}>Weight</th>
                                                                     <th style={{ textAlign: 'right', width: 150 }}>Ext. Cost</th>
                                                                 </tr>
                                                             </thead>
@@ -2234,11 +2242,14 @@ export default function PurchaseOrdersPage() {
                                                                         <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }} title={dim ? "From L×H×W and PCS/BOX" : "Set packaging dimensions on the item"}>
                                                                             {formatCbm(totalCbm, 4)}
                                                                         </td>
+                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }} title={dim?.weight_kg != null ? "Box KG \u00d7 quantity (same as Stock Items Weight)" : "Set KG on the item"}>
+                                                                            {calcLineWeightKg(dim, line.qty) == null ? "\u2014" : `${formatWeightKg(calcLineWeightKg(dim, line.qty))} kg`}
+                                                                        </td>
                                                                         <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--accent-primary)' }}>₱{fmt(line.extCost)}</td>
                                                                     </tr>
                                                                     );
                                                                 }) : (
-                                                                    <tr><td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No line items found for this order.</td></tr>
+                                                                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No line items found for this order.</td></tr>
                                                                 )}
                                                             </tbody>
                                                         </table>
