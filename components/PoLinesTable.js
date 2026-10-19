@@ -2,7 +2,7 @@
 
 import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
 import { getBasePath } from "@/lib/base-path";
-import { calcLineWeightKg, isInteractiveClickTarget, poLineKey, poLineUrl } from "@/lib/po-metrics";
+import { calcPoLineWeightKg, isInteractiveClickTarget, poLineKey, poLineUrl } from "@/lib/po-metrics";
 
 function fmt(n) {
     return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -46,7 +46,7 @@ export default function PoLinesTable({ lines, lookupDim, onItemClick, orderNbr }
                             pcs_per_box: dim?.pcs_per_box,
                             qty: line.qty,
                         });
-                        const weight = calcLineWeightKg(dim, line.qty);
+                        const weight = calcPoLineWeightKg(dim, line.qty);
                         const clickable = !!orderNbr;
                         return (
                             <tr

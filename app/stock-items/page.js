@@ -653,12 +653,11 @@ export default function StockItemsPage() {
                                                     ) : (
                                                         <span
                                                             className="si-weight-stack"
-                                                            title={`On-hand weight is piece weight × ${onHand.toLocaleString()} on hand. Piece weight is box KG ÷ pieces per box.`}
+                                                            title={`On-hand weight is box KG × ${onHand.toLocaleString()} on hand. Piece weight is box KG ÷ pieces per box.`}
                                                         >
                                                             <span className="si-weight">
                                                                 {formatWeightKg(calcStockWeightKg({
                                                                     weight_kg: item.weightKg,
-                                                                    pcs_per_box: item.pcsPerBox,
                                                                     qty: onHand,
                                                                 }))} kg
                                                             </span>

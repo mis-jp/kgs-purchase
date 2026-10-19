@@ -7,7 +7,7 @@ import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import { Breadcrumb, Card, DASH, DefGrid, Stat, StatusPill } from "@/components/PoDetailParts";
 import { calcBoxCbm, calcPieceWeightKg, calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
-import { calcLineWeightKg, poDetailHref } from "@/lib/po-metrics";
+import { calcPoLineWeightKg, poDetailHref } from "@/lib/po-metrics";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
@@ -109,7 +109,7 @@ export default function PurchaseOrderLinePage() {
         pcs_per_box: dim?.pcs_per_box,
         qty: line.qty,
     }) : null;
-    const weight = line ? calcLineWeightKg(dim, line.qty) : null;
+    const weight = line ? calcPoLineWeightKg(dim, line.qty) : null;
     const boxCbm = dim ? (calcBoxCbm(dim.length_m, dim.height_m, dim.width_m) ?? dim.cbm) : null;
     const pieceKg = dim ? calcPieceWeightKg(dim.weight_kg, dim.pcs_per_box) : null;
     const branches = Array.isArray(item?.branches) ? item.branches : [];

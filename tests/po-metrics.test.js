@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { calcPieceWeightKg, calcStockWeightKg } from '../lib/item-dimensions.js';
 
 import {
-  calcLineWeightKg,
+  calcPoLineWeightKg,
   calcOrderWeightKg,
   poDetailHref,
   isEtdBeyondContainer,
@@ -17,21 +17,22 @@ import {
   isInteractiveClickTarget,
 } from '../lib/po-metrics.js';
 
-test('calcLineWeightKg uses piece weight (box KG / PCS/BOX) x qty like Stock Items', () => {
+test('calcPoLineWeightKg uses piece weight (box KG / PCS/BOX) x qty for PO lines', () => {
   // Eyelet #2 130103101002100: box 33.5 kg, 25 pcs/box -> piece 1.34 kg; PO qty 30 -> 40.2 kg
   const eyelet = { weight_kg: 33.5, pcs_per_box: 25 };
-  assert.ok(Math.abs(calcLineWeightKg(eyelet, 30) - 40.2) < 1e-9);
-  assert.ok(Math.abs(calcStockWeightKg({ weight_kg: 33.5, pcs_per_box: 25, qty: 1586 }) - 2125.24) < 1e-9);
+  assert.ok(Math.abs(calcPoLineWeightKg(eyelet, 30) - 40.2) < 1e-9);
+  // Stock Items keeps box KG x on-hand: 33.5 x 1,586 = 53,131 kg
+  assert.ok(Math.abs(calcStockWeightKg({ weight_kg: 33.5, qty: 1586 }) - 53131) < 1e-9);
   assert.ok(Math.abs(calcPieceWeightKg(33.5, 25) - 1.34) < 1e-9);
   // No PCS/BOX: one unit is one box
-  assert.equal(calcLineWeightKg({ weight_kg: 2.5 }, 4), 10);
-  assert.equal(calcLineWeightKg({ weight_kg: '1.25' }, '8'), 10);
+  assert.equal(calcPoLineWeightKg({ weight_kg: 2.5 }, 4), 10);
+  assert.equal(calcPoLineWeightKg({ weight_kg: '1.25' }, '8'), 10);
 });
 
-test('calcLineWeightKg is null when the item has no KG and 0 for no qty', () => {
-  assert.equal(calcLineWeightKg(null, 5), null);
-  assert.equal(calcLineWeightKg({ weight_kg: null }, 5), null);
-  assert.equal(calcLineWeightKg({ weight_kg: 3 }, 0), 0);
+test('calcPoLineWeightKg is null when the item has no KG and 0 for no qty', () => {
+  assert.equal(calcPoLineWeightKg(null, 5), null);
+  assert.equal(calcPoLineWeightKg({ weight_kg: null }, 5), null);
+  assert.equal(calcPoLineWeightKg({ weight_kg: 3 }, 0), 0);
 });
 
 test('calcOrderWeightKg sums known line weights only', () => {
