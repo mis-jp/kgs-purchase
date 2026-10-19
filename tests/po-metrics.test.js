@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { calcPieceWeightKg, calcStockWeightKg } from '../lib/item-dimensions.js';
 
 import {
   calcLineWeightKg,
@@ -16,7 +17,13 @@ import {
   isInteractiveClickTarget,
 } from '../lib/po-metrics.js';
 
-test('calcLineWeightKg multiplies box KG by quantity like Stock Items', () => {
+test('calcLineWeightKg uses piece weight (box KG / PCS/BOX) x qty like Stock Items', () => {
+  // Eyelet #2 130103101002100: box 33.5 kg, 25 pcs/box -> piece 1.34 kg; PO qty 30 -> 40.2 kg
+  const eyelet = { weight_kg: 33.5, pcs_per_box: 25 };
+  assert.ok(Math.abs(calcLineWeightKg(eyelet, 30) - 40.2) < 1e-9);
+  assert.ok(Math.abs(calcStockWeightKg({ weight_kg: 33.5, pcs_per_box: 25, qty: 1586 }) - 2125.24) < 1e-9);
+  assert.ok(Math.abs(calcPieceWeightKg(33.5, 25) - 1.34) < 1e-9);
+  // No PCS/BOX: one unit is one box
   assert.equal(calcLineWeightKg({ weight_kg: 2.5 }, 4), 10);
   assert.equal(calcLineWeightKg({ weight_kg: '1.25' }, '8'), 10);
 });

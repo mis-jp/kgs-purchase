@@ -403,7 +403,7 @@ export default function InventoryDetailModal({ inventoryId, onClose, onDimension
                                         readOnly
                                         tabIndex={-1}
                                         placeholder="—"
-                                        title="Box KG multiplied by the quantity on hand"
+                                        title="Piece weight (box KG / PCS/BOX) multiplied by the quantity on hand"
                                     />
                                 </label>
                                 <p className="idm-dim-note">

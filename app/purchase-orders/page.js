@@ -2201,7 +2201,7 @@ export default function PurchaseOrdersPage() {
                                                     ))}
                                                 </div>
                                             </td>
-                                            <td className="po-col-weight po-weight-td" title={po.totalWeightKg == null ? "No line has KG set" : "Sum of line box KG \u00d7 quantity"}>
+                                            <td className="po-col-weight po-weight-td" title={po.totalWeightKg == null ? "No line has KG set" : "Sum of line piece weight (box KG / PCS/BOX) \u00d7 quantity"}>
                                                 {poWeightLabel(po) || "\u2014"}
                                             </td>
                                             <td className="po-amount-td" onClick={(e) => e.stopPropagation()}>

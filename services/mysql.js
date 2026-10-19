@@ -795,7 +795,7 @@ export const MySqlService = {
                 }
             }
 
-            // PO total weight = sum of line box KG x qty (same rule as Stock Items and the
+            // PO total weight = sum of line piece weight x qty (same rule as Stock Items and the
             // nested Weight column). One batched item_dimensions lookup per page.
             let dimsById = {};
             const lineItemIds = [...new Set(
