@@ -1,0 +1,84 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+
+import { requireInventoryUser, decodeJwt } from '../app/api/flutter-kelinconnect-inventory/_lib/auth.js';
+
+const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+
+function sign(payload, secret = 'test-secret', alg = 'HS256') {
+  const head = b64({ alg, typ: 'JWT' });
+  const body = b64(payload);
+  const sig = crypto.createHmac('sha256', secret).update(`${head}.${body}`).digest('base64url');
+  return `${head}.${body}.${sig}`;
+}
+
+function req(token, extra = {}) {
+  const headers = new Headers(extra);
+  if (token) headers.set('authorization', `Bearer ${token}`);
+  return { headers };
+}
+
+const future = () => Math.floor(Date.now() / 1000) + 3600;
+
+test('decodeJwt reads the payload and rejects junk', () => {
+  assert.equal(decodeJwt('nope'), null);
+  assert.equal(decodeJwt(sign({ loginid: 'KG1', exp: future() })).payload.loginid, 'KG1');
+});
+
+test('missing bearer is 401', async () => {
+  await assert.rejects(requireInventoryUser(req('')), (e) => e.status === 401);
+});
+
+test('local HS256: valid token gives the login id and name', async () => {
+  process.env.KC_JWT_SECRET = 'test-secret';
+  try {
+    const ctx = await requireInventoryUser(req(sign({ loginid: 'KG0543', name: 'Juan Dela Cruz', exp: future() })));
+    assert.deepEqual(ctx.user, { loginId: 'KG0543', name: 'Juan Dela Cruz' });
+  } finally {
+    delete process.env.KC_JWT_SECRET;
+  }
+});
+
+test('local HS256: wrong signature and expired tokens are 401', async () => {
+  process.env.KC_JWT_SECRET = 'test-secret';
+  try {
+    await assert.rejects(
+      requireInventoryUser(req(sign({ loginid: 'X', exp: future() }, 'other-secret'))),
+      (e) => e.status === 401
+    );
+    await assert.rejects(
+      requireInventoryUser(req(sign({ loginid: 'X', exp: 1 }))),
+      (e) => e.status === 401
+    );
+  } finally {
+    delete process.env.KC_JWT_SECRET;
+  }
+});
+
+test('remote check: KelinConnect 401 rejects, 200 accepts and is cached', async () => {
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  let status = 401;
+  globalThis.fetch = async (url, init) => {
+    calls += 1;
+    assert.match(init.headers.Authorization, /^Bearer /);
+    return new Response(JSON.stringify({ ok: true }), { status });
+  };
+  try {
+    const rejected = sign({ loginid: 'A1', exp: future() }, 'kc-secret');
+    await assert.rejects(requireInventoryUser(req(rejected)), (e) => e.status === 401);
+
+    status = 200;
+    const accepted = sign({ sub: 'B2', exp: future() }, 'kc-secret');
+    const r = req(accepted, { 'x-kc-user-name': 'Maria' });
+    const ctx = await requireInventoryUser(r);
+    assert.deepEqual(ctx.user, { loginId: 'B2', name: 'Maria' });
+
+    const before = calls;
+    await requireInventoryUser(r);
+    assert.equal(calls, before, 'second call should use the cache');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
