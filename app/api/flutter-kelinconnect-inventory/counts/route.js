@@ -1,49 +1,46 @@
 import { requireInventoryUser } from "../_lib/auth";
-import { ok, failFromError, preflight, readJson, intParam, textParam, HttpError } from "../_lib/http";
+import { handle, ok, preflight, readJson, intParam, textParam } from "../_lib/http";
 import { listCounts, startCount } from "../_lib/counts";
-import { branchParam } from "../_lib/params";
+import { listLedgerCounts, startLedgerCount } from "../_lib/ledger-counts";
+import { optionalMember, requireMember } from "../_lib/members";
+import { ledgerStatus } from "../_lib/ledger-db";
+import { branchParam, oneOf } from "../_lib/params";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const STATUSES = ["open", "submitted", "cancelled"];
+const STATUSES = ["open", "submitted", "reviewed", "cancelled"];
 
 export function OPTIONS() {
     return preflight();
 }
 
-export async function GET(request) {
-    try {
-        await requireInventoryUser(request);
-        const searchParams = new URL(request.url).searchParams;
-        const status = textParam(searchParams.get("status"), 20);
-        if (status && !STATUSES.includes(status)) {
-            throw new HttpError(400, `Unknown status "${status}". Use ${STATUSES.join(", ")}.`);
-        }
-        const counts = await listCounts({
-            branch: branchParam(searchParams.get("branch")),
-            status,
-            limit: intParam(searchParams.get("limit"), 50, { min: 1, max: 200 }),
-        });
-        return ok({ counts });
-    } catch (err) {
-        return failFromError(err);
-    }
-}
+/** Counts run on the ledger once its database exists; before that, on the first-version tables. */
+export const GET = handle(async (request) => {
+    const searchParams = new URL(request.url).searchParams;
+    const filters = {
+        branch: branchParam(searchParams.get("branch")),
+        status: oneOf(searchParams.get("status"), STATUSES, "status"),
+        limit: intParam(searchParams.get("limit"), 50, { min: 1, max: 200 }),
+    };
+    const member = await optionalMember(request);
+    if (member.ledger) return ok({ counts: await listLedgerCounts(member, filters) });
+    return ok({ counts: await listCounts(filters) });
+});
 
-export async function POST(request) {
-    try {
-        const { user } = await requireInventoryUser(request);
-        const body = await readJson(request);
-        const count = await startCount({
-            branch: branchParam(body.branch),
-            category: textParam(body.category, 100),
-            note: textParam(body.note, 500),
-            includeZero: body.includeZero === true,
-            user,
-        });
-        return ok({ count }, 201);
-    } catch (err) {
-        return failFromError(err);
+export const POST = handle(async (request) => {
+    const body = await readJson(request);
+    if ((await ledgerStatus()).ready) {
+        const member = await requireMember(request);
+        return ok({ count: await startLedgerCount(member, { ...body, branch: branchParam(body.branch) }, request) }, 201);
     }
-}
+    const { user } = await requireInventoryUser(request);
+    const count = await startCount({
+        branch: branchParam(body.branch),
+        category: textParam(body.category, 100),
+        note: textParam(body.note, 500),
+        includeZero: body.includeZero === true,
+        user,
+    });
+    return ok({ count }, 201);
+});
