@@ -324,17 +324,18 @@ async function loadCmsMediaRows(
       `SELECT ${selectCols}
        FROM product_inventory_items p
        INNER JOIN kc_products kp
-         ON BINARY kp.id = BINARY p.inventory_id AND kp.is_active = 1
+         ON p.inventory_id = kp.id COLLATE utf8mb4_unicode_ci
+        AND BINARY kp.id = BINARY p.inventory_id AND kp.is_active = 1
        INNER JOIN kc_folders f
-         ON BINARY f.id = BINARY kp.folder_id AND f.is_active = 1
-        AND BINARY f.item_class_id = BINARY ?
+         ON f.id = kp.folder_id AND BINARY f.id = BINARY kp.folder_id AND f.is_active = 1
+        AND f.item_class_id = ? AND BINARY f.item_class_id = BINARY ?
        LEFT JOIN inventory_models m ON m.id = p.model_id
        WHERE p.deleted_at IS NULL
          AND LOWER(TRIM(p.item_status)) = 'active'
          ${urlClause}
          ${modelClause}
        ${orderBy}`,
-      [itemClassId, ...modelParam],
+      [itemClassId, itemClassId, ...modelParam],
     );
     if (rows.length > 0) return mapRows(rows);
   } catch (err) {
@@ -519,9 +520,9 @@ async function cmsMediaUrlForProduct(productId: string): Promise<string> {
     const [rows] = await getPool().query<RowDataPacket[]>(
       `SELECT image_url, brochure_url, youtube_url
        FROM product_inventory_items
-       WHERE deleted_at IS NULL AND BINARY inventory_id = BINARY ?
+       WHERE deleted_at IS NULL AND inventory_id = ? AND BINARY inventory_id = BINARY ?
        LIMIT 1`,
-      [productId],
+      [productId, productId],
     );
     const row = rows[0];
     if (!row) return "";
@@ -1659,9 +1660,9 @@ export async function getProductMedia(
       `SELECT id, inventory_id, inventory_name, image_url, brochure_url, youtube_url,
               kc_category, kc_item_class
        FROM product_inventory_items
-       WHERE deleted_at IS NULL AND BINARY inventory_id = BINARY ?
+       WHERE deleted_at IS NULL AND inventory_id = ? AND BINARY inventory_id = BINARY ?
        LIMIT 1`,
-      [lookup],
+      [lookup, lookup],
     );
     rows = bySku;
   }

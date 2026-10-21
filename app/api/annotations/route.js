@@ -15,12 +15,13 @@ export async function GET(req) {
             return NextResponse.json({ message: "Module name is required" }, { status: 400 });
         }
 
-        const annotations = await MySqlService.getAnnotations(moduleName);
-        // Optional: scope to one PO (detail page) so other orders' entries are not sent.
+        // Optional: scope to one PO (detail page) so other orders' entries are not read or sent.
         const orderNbr = (searchParams.get("orderNbr") || "").trim();
         if (orderNbr) {
-            return NextResponse.json(filterAnnotationsForOrder(annotations, orderNbr));
+            const scoped = await MySqlService.getAnnotationsForOrder(moduleName, orderNbr);
+            return NextResponse.json(filterAnnotationsForOrder(scoped, orderNbr));
         }
+        const annotations = await MySqlService.getAnnotations(moduleName);
         return NextResponse.json(annotations);
     } catch (err) {
         console.error("[Annotations API GET Error]", err);

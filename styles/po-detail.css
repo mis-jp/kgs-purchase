@@ -142,6 +142,24 @@ button.pod-chip:hover {
     flex-wrap: wrap;
 }
 
+.pod-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.pod-live::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--status-success, #10b981);
+}
+
 .pod-header-actions .po-erp-status {
     min-height: 30px;
     padding: 0.2rem 0.75rem;

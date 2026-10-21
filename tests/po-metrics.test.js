@@ -13,6 +13,7 @@ import {
   poLineKey,
   findPoLine,
   poLineHref,
+  poLogisticsTable,
   poLineUrl,
   isInteractiveClickTarget,
 } from '../lib/po-metrics.js';
@@ -106,6 +107,15 @@ test('poLineHref and poLineUrl build the line route', () => {
   assert.equal(poLineHref('PO1', '2'), '/purchase-orders/PO1/lines/2');
   assert.equal(poLineUrl('PO1', 'pos-1', '/kgs-purchase'), '/kgs-purchase/purchase-orders/PO1/lines/pos-1');
   assert.equal(poLineHref('', '2'), '');
+});
+
+test('poLogisticsTable reads annotation lists and falls back to the receipt date', () => {
+  const t = poLogisticsTable({ containerNumber: '["C1","C2"]', remarks: 'note' }, '2026-10-01');
+  assert.equal(t.rows, 2);
+  assert.deepEqual(t.columns[0], ['C1', 'C2']);
+  assert.deepEqual(t.columns[3], ['2026-10-01']);
+  assert.deepEqual(t.columns[4], ['note']);
+  assert.equal(poLogisticsTable({}, null).rows, 0);
 });
 
 test('isInteractiveClickTarget checks closest()', () => {

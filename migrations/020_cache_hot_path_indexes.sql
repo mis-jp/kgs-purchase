@@ -3,6 +3,9 @@
 -- Compatible with existing data. Safe to re-run: every ALTER checks
 -- information_schema first and skips tables that do not exist yet.
 -- Uses online DDL (ALGORITHM=INPLACE, LOCK=NONE) so reads and writes continue.
+-- Run with a short lock_wait_timeout so an ALTER that cannot get its metadata
+-- lock gives up instead of queueing every other query behind it.
+SET SESSION lock_wait_timeout = 5;
 
 -- Inventory DB: Product Directory (KC CMS) browse tree
 USE `db_kelin_inventory`;
@@ -53,14 +56,27 @@ USE `db_purchase`;
 --   WHERE company_id = ? AND warehouse_id != '__catalog__'   (and = '__catalog__')
 -- Stock Items KPI: SUM(on_hand) WHERE company_id = ? AND warehouse_id != '__catalog__'
 --   [AND UPPER(TRIM(warehouse_id)) IN (...)]
+-- Stock Items / Inventory catalog page:
+--   WHERE company_id = ? AND warehouse_id = '__catalog__' ORDER BY inventory_id LIMIT ...
 -- The PK (company_id, inventory_id, warehouse_id) cannot seek on warehouse_id, so
--- these read every clustered row for the company. With on_hand included the
--- counts and the KPI sum are answered from this narrow index alone.
+-- these read every clustered row for the company. This index seeks straight to the
+-- catalog or warehouse rows, returns them already sorted by inventory_id, and
+-- answers the counts and the on-hand sum without touching the table rows.
 SET @tbl := (SELECT COUNT(*) FROM information_schema.TABLES
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'forecast_item_stock');
 SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
-  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'forecast_item_stock' AND INDEX_NAME = 'idx_fis_company_wh_onhand');
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'forecast_item_stock' AND INDEX_NAME = 'idx_fis_company_wh_inv');
 SET @sql := IF(@tbl = 1 AND @idx = 0,
-  'ALTER TABLE forecast_item_stock ADD INDEX idx_fis_company_wh_onhand (company_id, warehouse_id, on_hand), ALGORITHM=INPLACE, LOCK=NONE',
+  'ALTER TABLE forecast_item_stock ADD INDEX idx_fis_company_wh_inv (company_id, warehouse_id, inventory_id, on_hand), ALGORITHM=INPLACE, LOCK=NONE',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Syncing Center history: SELECT ... FROM sync_logs ORDER BY timestamp DESC LIMIT ?
+SET @tbl := (SELECT COUNT(*) FROM information_schema.TABLES
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sync_logs');
+SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sync_logs' AND INDEX_NAME = 'idx_sync_logs_timestamp');
+SET @sql := IF(@tbl = 1 AND @idx = 0,
+  'ALTER TABLE sync_logs ADD INDEX idx_sync_logs_timestamp (`timestamp`), ALGORITHM=INPLACE, LOCK=NONE',
   'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

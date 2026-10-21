@@ -2094,11 +2094,18 @@ export default function PurchaseOrdersPage() {
                                 const onLogisticsRemove = (i) => handleLogisticsRemove(key, i, po.receiptDate);
                                 return (
                                     <Fragment key={key}>
-                                        <tr className={`db-clickable-row ${isOpen ? "po-row-expanded" : ""}`} onClick={() => toggleExpand(key)}>
+                                        <tr className={isOpen ? "po-row-expanded" : undefined}>
                                             <td>
-                                                <span className={`po-expand-icon ${isOpen ? "po-expand-open" : ""}`}>
+                                                <button
+                                                    type="button"
+                                                    className={`po-expand-icon po-expand-btn ${isOpen ? "po-expand-open" : ""}`}
+                                                    onClick={() => toggleExpand(key)}
+                                                    aria-expanded={isOpen}
+                                                    aria-label={isOpen ? `Hide items for ${po.orderNbr}` : `Show items for ${po.orderNbr}`}
+                                                    title={isOpen ? "Hide items" : "Show items"}
+                                                >
                                                     <IconChevronDown />
-                                                </span>
+                                                </button>
                                             </td>
                                             <td className="po-col-branch">
                                                 <span className="po-branch-cell" title={orderBranchLabel(po) || ""}>
@@ -2106,7 +2113,7 @@ export default function PurchaseOrdersPage() {
                                                 </span>
                                             </td>
                                             <td className="po-col-order">
-                                                <Link className="db-inv-id" href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" title={`Open ${po.orderNbr} in a new tab`} onClick={(e) => e.stopPropagation()}>{po.orderNbr}</Link>
+                                                <span className="db-inv-id" title={po.orderNbr}>{po.orderNbr}</span>
                                             </td>
                                             <td className="po-col-vendor-id">
                                                 <span className="po-vendor-id" title={po.vendorId || ""}>{po.vendorId || "—"}</span>
@@ -2224,9 +2231,19 @@ export default function PurchaseOrdersPage() {
                                         {isOpen && (
                                             <tr className="po-lines-row">
                                                 <td colSpan={17}>
-                                                    <div style={{ textAlign: 'right', marginBottom: '0.5rem' }}>
-                                                        <Link href={poDetailHref(po.orderNbr)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                                                            Open whole PO {po.orderNbr} in a new tab
+                                                    <div className="po-lines-toolbar">
+                                                        <span className="po-lines-toolbar-title">Items on {po.orderNbr}</span>
+                                                        <Link
+                                                            className="po-open-whole-btn"
+                                                            href={poDetailHref(po.orderNbr)}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            title={`Open ${po.orderNbr} in a new tab`}
+                                                        >
+                                                            Open whole PO
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                                                <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                                            </svg>
                                                         </Link>
                                                     </div>
                                                     <PoLinesTable lines={po.lines} lookupDim={lookupLineDim} onItemClick={setSelectedId} orderNbr={po.orderNbr} />

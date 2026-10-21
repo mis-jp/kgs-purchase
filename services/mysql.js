@@ -5149,6 +5149,26 @@ export const MySqlService = {
     },
 
     /**
+     * Annotations for one order (bare `NBR` or typed `TYPE-NBR` ref ids), via unique_annotation.
+     * Returns the same { [ref_id]: { [field_key]: value } } shape as getAnnotations, uncached.
+     */
+    async getAnnotationsForOrder(moduleName, orderNbr) {
+        const nbr = String(orderNbr || "").trim();
+        if (!nbr) return {};
+        const likeNbr = nbr.replace(/[\\%_]/g, (c) => `\\${c}`);
+        const [rows] = await purchasePool.query(
+            `SELECT ref_id, field_key, field_value FROM user_annotations
+             WHERE module = ? AND (ref_id = ? OR ref_id LIKE ?)`,
+            [moduleName, nbr, `%-${likeNbr}`]
+        );
+        return rows.reduce((acc, row) => {
+            if (!acc[row.ref_id]) acc[row.ref_id] = {};
+            acc[row.ref_id][row.field_key] = row.field_value;
+            return acc;
+        }, {});
+    },
+
+    /**
      * Promised On (ETD) and receipt date for a set of purchase order numbers.
      * Used by the packing-list dashboard; does not filter by status.
      */

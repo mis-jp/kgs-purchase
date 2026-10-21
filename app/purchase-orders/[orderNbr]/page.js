@@ -1,27 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { fetchWithAuth } from "@/lib/api-client";
+import { usePoLiveRefresh } from "@/lib/use-po-live-refresh";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PoLinesTable from "@/components/PoLinesTable";
 import { Breadcrumb, Card, DASH, DefGrid, Stat, StatusPill } from "@/components/PoDetailParts";
 import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
-import { calcOrderWeightKg, pickOrderAnnotation } from "@/lib/po-metrics";
+import { PO_LOGISTICS_FIELDS as LOGISTICS_FIELDS, calcOrderWeightKg, pickOrderAnnotation, poLogisticsTable } from "@/lib/po-metrics";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
 import "@/styles/inventory-detail.css";
 import "@/styles/po-detail.css";
-
-const LOGISTICS_FIELDS = [
-    ["containerNumber", "Container"],
-    ["shipOutDate", "Ship Out"],
-    ["eta", "ETA"],
-    ["receivedDate", "Received"],
-    ["remarks", "Remarks"],
-    ["userStatus", "User Status"],
-];
 
 function fmt(n) {
     return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -36,21 +28,6 @@ function fmtDate(d) {
     const m = String(date.getMonth() + 1).padStart(2, "0");
     const day = String(date.getDate()).padStart(2, "0");
     return `${date.getFullYear()}/${m}/${day}`;
-}
-
-function toList(raw) {
-    if (raw == null || raw === "") return [];
-    if (Array.isArray(raw)) return raw.map((v) => (v == null ? "" : String(v)));
-    const s = String(raw).trim();
-    if (s.startsWith("[")) {
-        try {
-            const parsed = JSON.parse(s);
-            if (Array.isArray(parsed)) return parsed.map((v) => (v == null ? "" : String(v)));
-        } catch {
-            /* plain text */
-        }
-    }
-    return s ? [s] : [];
 }
 
 function branchesOf(lines) {
@@ -82,13 +59,19 @@ export default function PurchaseOrderDetailPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [selectedId, setSelectedId] = useState(null);
+    const [updatedAt, setUpdatedAt] = useState(null);
+    const liveTick = usePoLiveRefresh();
+    const loadedNbrRef = useRef("");
 
     useEffect(() => {
         if (!orderNbr) return;
         let active = true;
+        const silent = loadedNbrRef.current === orderNbr;
         (async () => {
-            setLoading(true);
-            setError(null);
+            if (!silent) {
+                setLoading(true);
+                setError(null);
+            }
             try {
                 // Scoped to exactly this order number (IN (?) on the server; branch access still applies).
                 const qs = new URLSearchParams({ orderNbrs: orderNbr, page: "1", pageSize: "5" });
@@ -102,7 +85,10 @@ export default function PurchaseOrderDetailPage() {
                     (o) => String(o.orderNbr || "").trim() === orderNbr
                 ) || null;
                 if (!active) return;
+                if (silent && !match) return;
                 setPo(match);
+                setUpdatedAt(new Date());
+                loadedNbrRef.current = orderNbr;
 
                 try {
                     // Server returns only this PO's annotation entry.
@@ -121,15 +107,15 @@ export default function PurchaseOrderDetailPage() {
                     }
                 }
             } catch (err) {
-                if (active && err.message !== "Unauthorized") setError(err.message || "Failed to load purchase order.");
+                if (active && !silent && err.message !== "Unauthorized") setError(err.message || "Failed to load purchase order.");
             } finally {
-                if (active) setLoading(false);
+                if (active && !silent) setLoading(false);
             }
         })();
         return () => {
             active = false;
         };
-    }, [orderNbr]);
+    }, [orderNbr, liveTick]);
 
     useEffect(() => {
         if (orderNbr) document.title = `PO ${orderNbr}`;
@@ -142,9 +128,7 @@ export default function PurchaseOrderDetailPage() {
     };
 
     const lines = po?.lines || [];
-    const logistics = LOGISTICS_FIELDS.map(([key]) => toList(annotation?.[key]));
-    if (!logistics[3].some(Boolean) && po?.receiptDate) logistics[3] = [String(po.receiptDate)];
-    const logisticsRows = Math.max(0, ...logistics.map((l) => l.filter(Boolean).length ? l.length : 0));
+    const { columns: logistics, rows: logisticsRows } = poLogisticsTable(annotation, po?.receiptDate);
     const totalWeight = calcOrderWeightKg(lines, lookupDim);
     let totalCbm = null;
     for (const l of lines) {
@@ -176,6 +160,11 @@ export default function PurchaseOrderDetailPage() {
                                 </div>
                             </div>
                             <div className="pod-header-actions">
+                                {updatedAt && (
+                                    <span className="pod-live" title="Refreshed from Acumatica every 30 seconds while this tab is open">
+                                        Live {"\u00b7"} updated {updatedAt.toLocaleTimeString()}
+                                    </span>
+                                )}
                                 <StatusPill status={po?.status} />
                             </div>
                         </div>

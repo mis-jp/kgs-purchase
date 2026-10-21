@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { fetchWithAuth } from "@/lib/api-client";
+import { usePoLiveRefresh } from "@/lib/use-po-live-refresh";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import { Breadcrumb, Card, DASH, DefGrid, Stat, StatusPill } from "@/components/PoDetailParts";
-import { calcBoxCbm, calcPieceWeightKg, calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
-import { calcPoLineWeightKg, poDetailHref } from "@/lib/po-metrics";
+import { calcTotalCbm, formatCbm, formatWeightKg } from "@/lib/item-dimensions";
+import {
+    PO_LOGISTICS_FIELDS,
+    calcPoLineWeightKg,
+    pickOrderAnnotation,
+    poDetailHref,
+    poLogisticsTable,
+} from "@/lib/po-metrics";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
@@ -50,22 +57,30 @@ export default function PurchaseOrderLinePage() {
 
     const [order, setOrder] = useState(null);
     const [line, setLine] = useState(null);
-    const [item, setItem] = useState(null);
+    const [dim, setDim] = useState(null);
+    const [annotation, setAnnotation] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showItem, setShowItem] = useState(false);
+    const [updatedAt, setUpdatedAt] = useState(null);
+    const liveTick = usePoLiveRefresh();
+    const loadedKeyRef = useRef("");
 
     useEffect(() => {
         if (!orderNbr || !lineKey) return;
         let active = true;
+        const pageKey = `${orderNbr}|${lineKey}`;
+        const silent = loadedKeyRef.current === pageKey;
         (async () => {
-            setLoading(true);
-            setError(null);
+            if (!silent) {
+                setLoading(true);
+                setError(null);
+            }
             try {
                 const qs = new URLSearchParams({ orderNbr, lineKey });
                 const res = await fetchWithAuth(`/api/po/line?${qs}`);
                 if (res.status === 404) {
-                    if (active) { setOrder(null); setLine(null); }
+                    if (active && !silent) { setOrder(null); setLine(null); }
                     return;
                 }
                 if (!res.ok) {
@@ -76,28 +91,39 @@ export default function PurchaseOrderLinePage() {
                 if (!active) return;
                 setOrder(data.order || null);
                 setLine(data.line || null);
+                setUpdatedAt(new Date());
+                loadedKeyRef.current = pageKey;
+
+                try {
+                    const aRes = await fetchWithAuth(`/api/annotations?module=po&orderNbr=${encodeURIComponent(orderNbr)}`);
+                    if (aRes.ok && active) setAnnotation(pickOrderAnnotation(await aRes.json(), orderNbr));
+                } catch (e) {
+                    console.error("Failed to load PO annotations", e);
+                }
+
                 const id = String(data.line?.inventoryId || "").trim();
                 if (id) {
-                    // Same Stock Items detail API the item popup uses (dimensions, KG, on hand).
-                    const iRes = await fetchWithAuth(`/api/stock-items/${encodeURIComponent(id)}`);
-                    if (iRes.ok && active) setItem(await iRes.json());
+                    const dRes = await fetchWithAuth(`/api/stock-items/dimensions?ids=${encodeURIComponent(id)}`);
+                    if (dRes.ok && active) {
+                        const d = await dRes.json();
+                        setDim(d.dimensions?.[id] || d.dimensions?.[id.toUpperCase()] || null);
+                    }
                 }
             } catch (err) {
-                if (active && err.message !== "Unauthorized") setError(err.message || "Failed to load PO line.");
+                if (active && !silent && err.message !== "Unauthorized") setError(err.message || "Failed to load PO line.");
             } finally {
-                if (active) setLoading(false);
+                if (active && !silent) setLoading(false);
             }
         })();
         return () => {
             active = false;
         };
-    }, [orderNbr, lineKey]);
+    }, [orderNbr, lineKey, liveTick]);
 
     useEffect(() => {
-        if (orderNbr && line?.inventoryId) document.title = `${line.inventoryId} \u00b7 PO ${orderNbr}`;
+        if (orderNbr) document.title = `PO ${orderNbr}${line?.lineNbr != null ? ` \u00b7 Line ${line.lineNbr}` : ""}`;
     }, [orderNbr, line]);
 
-    const dim = item?.dimensions || null;
     const qty = Number(line?.qty) || 0;
     const extCost = Number(line?.extCost) || 0;
     const unitCost = qty > 0 ? extCost / qty : null;
@@ -110,10 +136,8 @@ export default function PurchaseOrderLinePage() {
         qty: line.qty,
     }) : null;
     const weight = line ? calcPoLineWeightKg(dim, line.qty) : null;
-    const boxCbm = dim ? (calcBoxCbm(dim.length_m, dim.height_m, dim.width_m) ?? dim.cbm) : null;
-    const pieceKg = dim ? calcPieceWeightKg(dim.weight_kg, dim.pcs_per_box) : null;
-    const branches = Array.isArray(item?.branches) ? item.branches : [];
     const lineLabel = line?.lineNbr != null ? `Line ${line.lineNbr}` : `Line ${line?.position || lineKey}`;
+    const { columns: logistics, rows: logisticsRows } = poLogisticsTable(annotation, order?.receiptDate);
 
     const crumbs = [
         { label: "\u2190 Purchase Orders", href: "/purchase-orders" },
@@ -129,18 +153,23 @@ export default function PurchaseOrderLinePage() {
                         <Breadcrumb crumbs={crumbs} />
                         <div className="pod-header-row">
                             <div className="pod-header-main">
-                                <h1 className="pod-title">{line?.description || line?.inventoryId || `PO ${orderNbr}`}</h1>
+                                <h1 className="pod-title">PO {orderNbr}</h1>
                                 <div className="pod-subtitle">
+                                    {(order?.vendorName || order?.vendorId) && <span>{order.vendorName || order.vendorId}</span>}
+                                    {line && <span>{"\u00b7"} {lineLabel}{order?.lineCount ? ` of ${order.lineCount}` : ""}</span>}
                                     {line?.inventoryId && (
                                         <button type="button" className="pod-chip" title="Open item details" onClick={() => setShowItem(true)}>
                                             {line.inventoryId}
                                         </button>
                                     )}
-                                    <span>PO {orderNbr}</span>
-                                    {order?.vendorName && <span>{"\u00b7"} {order.vendorName}</span>}
                                 </div>
                             </div>
                             <div className="pod-header-actions">
+                                {updatedAt && (
+                                    <span className="pod-live" title="Refreshed from Acumatica every 30 seconds while this tab is open">
+                                        Live {"\u00b7"} updated {updatedAt.toLocaleTimeString()}
+                                    </span>
+                                )}
                                 <StatusPill status={order?.status} />
                                 {orderNbr && <Link className="pod-btn" href={poDetailHref(orderNbr)}>Open whole PO</Link>}
                             </div>
@@ -156,12 +185,12 @@ export default function PurchaseOrderLinePage() {
                     ) : (
                         <>
                             <div className="pod-stats">
-                                <Stat label="Quantity" value={fmtNum(line.qty)} unit={line.uom} />
-                                <Stat label="Received / Open" value={`${fmtNum(line.receivedQty) || 0} / ${fmtNum(line.openQty) || 0}`} />
+                                <Stat label="Ordered" value={fmtNum(line.qty)} unit={line.uom} />
+                                <Stat label="Received" value={fmtNum(line.receivedQty) || "0"} unit={line.uom} />
+                                <Stat label="Still open" value={fmtNum(line.openQty) || "0"} unit={line.uom} />
                                 <Stat label="Total CBM" value={totalCbm == null ? "" : formatCbm(totalCbm, 4)} hint="Set dimensions in Stock Items" />
                                 <Stat label="Weight" value={weight == null ? "" : formatWeightKg(weight)} unit="kg" hint="Set KG in Stock Items" />
-                                <Stat label="Unit Cost" value={unitCost == null ? "" : `\u20b1${fmt(unitCost)}`} />
-                                <Stat label="Ext. Cost" value={`\u20b1${fmt(extCost)}`} accent />
+                                <Stat label="Line cost" value={`\u20b1${fmt(extCost)}`} accent />
                             </div>
 
                             <div className="pod-grid-2">
@@ -172,48 +201,51 @@ export default function PurchaseOrderLinePage() {
                                         { label: "Vendor ID", value: order.vendorId },
                                         { label: "Vendor name", value: order.vendorName },
                                         { label: "PO date", value: fmtDate(order.date) },
-                                        { label: "ETD (Promised On)", value: fmtDate(order.promisedDate) },
-                                        { label: "Branch / Warehouse", value: line.branchId || line.warehouseId },
-                                        { label: "Line", value: `${lineLabel} of ${order.lineCount}` },
+                                        { label: "ETD (Promised On)", value: fmtDate(order.promisedDate || annotation?.etd) },
+                                        { label: "Received date", value: fmtDate(order.receiptDate) },
+                                        { label: "Origin", value: annotation?.origin },
+                                        { label: "Order amount", value: `\u20b1${fmt(order.totalAmount)}` },
+                                        { label: "Lines on this PO", value: order.lineCount ? String(order.lineCount) : "" },
                                     ]} />
                                 </Card>
 
-                                <Card title="Item (Stock Items)">
-                                    {!item ? (
-                                        <p className="pod-state">No Stock Items data for this item.</p>
-                                    ) : (
-                                        <>
-                                            <DefGrid items={[
-                                                { label: "Total on hand", value: fmtNum(item.totalOnHand) },
-                                                { label: "Total available", value: fmtNum(item.totalAvailable) },
-                                                { label: "KG per box", value: dim?.weight_kg != null ? `${formatWeightKg(dim.weight_kg) ?? DASH} kg` : "" },
-                                                { label: "Piece weight", value: pieceKg == null ? "" : `${formatWeightKg(pieceKg)} kg` },
-                                                { label: "PCS / box", value: fmtNum(dim?.pcs_per_box) },
-                                                { label: "Box size L \u00d7 H \u00d7 W (m)", value: dim && (dim.length_m || dim.height_m || dim.width_m) ? `${fmtNum(dim.length_m) || DASH} \u00d7 ${fmtNum(dim.height_m) || DASH} \u00d7 ${fmtNum(dim.width_m) || DASH}` : "" },
-                                                { label: "Box CBM", value: boxCbm == null ? "" : formatCbm(boxCbm, 4) },
-                                            ]} />
-                                            {branches.length > 0 && (
-                                                <div className="pod-table-wrap">
-                                                    <table className="pod-table">
-                                                        <thead>
-                                                            <tr><th>Branch</th><th className="pod-num">On hand</th><th className="pod-num">Available</th></tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {branches.map((b, i) => (
-                                                                <tr key={`${b.branchId}-${i}`}>
-                                                                    <td>{b.branchId || DASH}</td>
-                                                                    <td className="pod-num">{fmtNum(b.onHand) || 0}</td>
-                                                                    <td className="pod-num">{fmtNum(b.available) || 0}</td>
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            )}
-                                        </>
-                                    )}
+                                <Card title="This line">
+                                    <DefGrid items={[
+                                        { label: "Line", value: `${lineLabel}${order.lineCount ? ` of ${order.lineCount}` : ""}` },
+                                        { label: "Item ID", value: line.inventoryId },
+                                        { label: "Description", value: line.description },
+                                        { label: "Branch / Warehouse", value: line.branchId || line.warehouseId },
+                                        { label: "Unit", value: line.uom },
+                                        { label: "Unit cost", value: unitCost == null ? "" : `\u20b1${fmt(unitCost)}` },
+                                        { label: "Line cost", value: `\u20b1${fmt(extCost)}` },
+                                    ]} />
                                 </Card>
                             </div>
+
+                            <Card title="Logistics">
+                                {logisticsRows === 0 ? (
+                                    <p className="pod-state">No container or shipping details recorded yet.</p>
+                                ) : (
+                                    <div className="pod-table-wrap" style={{ marginTop: 0 }}>
+                                        <table className="pod-table">
+                                            <thead>
+                                                <tr>{PO_LOGISTICS_FIELDS.map(([key, label]) => <th key={key}>{label}</th>)}</tr>
+                                            </thead>
+                                            <tbody>
+                                                {Array.from({ length: logisticsRows }, (_, i) => (
+                                                    <tr key={i}>
+                                                        {PO_LOGISTICS_FIELDS.map(([key], f) => {
+                                                            const v = logistics[f][i] || "";
+                                                            const isDate = key === "shipOutDate" || key === "eta" || key === "receivedDate";
+                                                            return <td key={key}>{v ? (isDate ? fmtDate(v) : v) : <span className="pod-muted">{DASH}</span>}</td>;
+                                                        })}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </Card>
                         </>
                     )}
                 </div>
@@ -224,8 +256,7 @@ export default function PurchaseOrderLinePage() {
                     inventoryId={line.inventoryId}
                     onClose={() => setShowItem(false)}
                     onDimensionsSaved={(saved) => {
-                        if (!saved) return;
-                        setItem((prev) => (prev ? { ...prev, dimensions: { ...(prev.dimensions || {}), ...saved } } : prev));
+                        if (saved) setDim((prev) => ({ ...(prev || {}), ...saved }));
                     }}
                 />
             )}

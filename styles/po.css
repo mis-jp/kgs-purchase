@@ -1068,6 +1068,16 @@ select.po-select-box:focus {
     border: 1px solid var(--border-light);
 }
 
+.po-expand-btn {
+    padding: 0;
+    cursor: pointer;
+}
+
+.po-expand-btn:hover {
+    color: var(--accent-primary);
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
 .po-expand-icon svg {
     width: 12px;
     height: 12px;
@@ -1141,6 +1151,53 @@ select.po-select-box:focus {
 .po-lines-wrap {
     padding: 1.5rem 2.5rem 2rem 4rem;
     animation: poSlideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.po-lines-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.25rem 2.5rem 0 4rem;
+}
+
+.po-lines-toolbar + .po-lines-wrap {
+    padding-top: 0.75rem;
+}
+
+.po-lines-toolbar-title {
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.po-open-whole-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--accent-primary, #2563eb);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.po-open-whole-btn:hover,
+.po-open-whole-btn:focus-visible {
+    border-color: var(--accent-primary, #2563eb);
+    background: rgba(59, 130, 246, 0.1);
+    text-decoration: none;
+}
+
+.po-open-whole-btn:visited {
+    color: var(--accent-primary, #2563eb);
 }
 
 @keyframes poSlideDown {
