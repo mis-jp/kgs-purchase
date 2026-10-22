@@ -99,6 +99,52 @@ test('remote check: tries the next KelinConnect URL when the first reply has no 
   }
 });
 
+test('remote check: app sign-in id is ignored unless KC_TRUST_APP_LOGIN_ID=1', async () => {
+  const realFetch = globalThis.fetch;
+  const realTrust = process.env.KC_TRUST_APP_LOGIN_ID;
+  delete process.env.KC_TRUST_APP_LOGIN_ID;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ authenticated: true, user: { id: 'uuid-6', email: 'x@y.z' } }),
+    { status: 200 }
+  );
+  try {
+    const ctx = await requireInventoryUser(req(sign({ userId: 'uuid-6', exp: future() }, 'kc-secret-6'), { 'x-kc-login-id': 'KG0751' }));
+    assert.equal(ctx.user.loginId, 'unknown');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realTrust === undefined) delete process.env.KC_TRUST_APP_LOGIN_ID;
+    else process.env.KC_TRUST_APP_LOGIN_ID = realTrust;
+  }
+});
+
+test('remote check: app sign-in id is used only when trusted and KelinConnect accepts the token', async () => {
+  const realFetch = globalThis.fetch;
+  const realTrust = process.env.KC_TRUST_APP_LOGIN_ID;
+  process.env.KC_TRUST_APP_LOGIN_ID = '1';
+  let status = 200;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ authenticated: true, user: { id: 'uuid-3', email: 'x@y.z' } }),
+    { status }
+  );
+  try {
+    const ok = await requireInventoryUser(req(sign({ userId: 'uuid-3', exp: future() }, 'kc-secret-3'), { 'x-kc-login-id': 'kg0751' }));
+    assert.equal(ok.user.loginId, 'KG0751');
+
+    const junk = await requireInventoryUser(req(sign({ userId: 'uuid-4', exp: future() }, 'kc-secret-4'), { 'x-kc-login-id': "KG1' OR 1=1" }));
+    assert.equal(junk.user.loginId, 'unknown');
+
+    status = 401;
+    await assert.rejects(
+      requireInventoryUser(req(sign({ userId: 'uuid-5', exp: future() }, 'kc-secret-5'), { 'x-kc-login-id': 'KG0751' })),
+      (e) => e.status === 401
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realTrust === undefined) delete process.env.KC_TRUST_APP_LOGIN_ID;
+    else process.env.KC_TRUST_APP_LOGIN_ID = realTrust;
+  }
+});
+
 test('remote check: employee id comes from the KelinConnect reply when the token has none', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(

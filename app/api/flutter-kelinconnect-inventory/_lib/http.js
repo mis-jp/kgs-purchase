@@ -7,7 +7,7 @@ const NO_STORE = "no-store";
 
 export function withCors(res) {
     res.headers.set("Access-Control-Allow-Origin", "*");
-    res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-KC-User-Name");
+    res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-KC-User-Name, X-KC-Login-Id");
     res.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.headers.set("Cache-Control", NO_STORE);
     return res;

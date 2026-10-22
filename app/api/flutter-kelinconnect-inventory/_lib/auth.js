@@ -158,11 +158,23 @@ function pickClaim(payload, keys) {
 }
 
 /**
- * Login id (employee id such as KG0751) from the token, else from KelinConnect's verify reply.
- * `sub` / `id` are only a last resort: KelinConnect uses UUIDs there, not employee ids.
+ * Employee id the app read at sign-in (`X-KC-Login-Id`). Only consulted after the token itself
+ * was verified and names no employee, and only when KC_TRUST_APP_LOGIN_ID=1: the header is
+ * client-supplied, so any signed-in employee could otherwise claim another employee's id.
+ */
+function appLoginId(request) {
+    if (String(process.env.KC_TRUST_APP_LOGIN_ID ?? "").trim() !== "1") return "";
+    const value = String(request.headers.get("x-kc-login-id") || "").trim().toUpperCase();
+    return /^[A-Z0-9_-]{2,32}$/.test(value) ? value : "";
+}
+
+/**
+ * Login id (employee id such as KG0751): token claims, then KelinConnect's verify reply, then the
+ * app's sign-in id. `sub` / `id` are only a last resort: KelinConnect uses UUIDs there.
  */
 function userFromPayload(payload, request, verified) {
-    const loginId = pickClaim(payload, LOGIN_ID_KEYS) || verified?.loginId || pickClaim(payload, ["sub", "id"]);
+    const loginId = pickClaim(payload, LOGIN_ID_KEYS) || verified?.loginId || appLoginId(request)
+        || pickClaim(payload, ["sub", "id"]);
     const tokenName = pickClaim(payload, NAME_KEYS) || verified?.name || "";
     const headerName = String(request.headers.get("x-kc-user-name") || "").trim().slice(0, 120);
     return {

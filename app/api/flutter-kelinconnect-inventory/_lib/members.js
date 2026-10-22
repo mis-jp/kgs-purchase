@@ -13,8 +13,7 @@ async function loadMember(user, request) {
     const loginId = String(user.loginId || "").toUpperCase();
     if (!loginId || loginId === "UNKNOWN") {
         throw new HttpError(401,
-            "Inventory could not read your employee ID from your KelinConnect account (no login id). " +
-            "Please contact the Inventory admin.");
+            "The Inventory server could not match your KelinConnect account to your employee ID (no login id).");
     }
     const bootstrapAdmin = adminLoginIds().has(loginId);
     const [res] = await pool.query(
