@@ -145,6 +145,36 @@ test('remote check: app sign-in id is used only when trusted and KelinConnect ac
   }
 });
 
+test('remote check: employee id from session-from-ci only when it is the same account as the token', async () => {
+  const realFetch = globalThis.fetch;
+  const ciCalls = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/api/auth/session-from-ci')) {
+      ciCalls.push(init);
+      const cookie = init.headers.Cookie;
+      const id = cookie.includes('mine') ? 'uuid-7' : 'uuid-other';
+      return new Response(JSON.stringify({ user: { id, employee_id: 'kg0751', full_name: 'John Paul' } }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ authenticated: true, user: { id: 'uuid-7', email: 'x@y.z' } }), { status: 200 });
+  };
+  try {
+    const ok = await requireInventoryUser(req(sign({ userId: 'uuid-7', exp: future() }, 'kc-secret-7'), { 'x-kc-ci-session': 'mine0123456789abcdef' }));
+    assert.deepEqual(ok.user, { loginId: 'KG0751', name: 'John Paul' });
+    assert.equal(ciCalls[0].method, 'POST');
+    assert.equal(ciCalls[0].body, '{}');
+
+    const other = await requireInventoryUser(req(sign({ userId: 'uuid-7', exp: future() }, 'kc-secret-8'), { 'x-kc-ci-session': 'theirs0123456789abcdef' }));
+    assert.equal(other.user.loginId, 'unknown');
+
+    const before = ciCalls.length;
+    const junk = await requireInventoryUser(req(sign({ userId: 'uuid-7', exp: future() }, 'kc-secret-9'), { 'x-kc-ci-session': 'bad; cookie=1' }));
+    assert.equal(junk.user.loginId, 'unknown');
+    assert.equal(ciCalls.length, before, 'malformed session is never sent');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('remote check: employee id comes from the KelinConnect reply when the token has none', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(

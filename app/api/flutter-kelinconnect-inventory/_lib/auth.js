@@ -12,7 +12,8 @@ import { HttpError } from "./errors.js";
  * Remote results are cached per token for a few minutes.
  *
  * Every verified KelinConnect user may read all branches; counts are attributed
- * to the login id inside the token.
+ * to the login id inside the token, KelinConnect's verify reply, or `session-from-ci`
+ * for the app's HRIS session (`X-KC-CI-Session`).
  */
 
 const KC_ORIGIN = (process.env.KC_ORIGIN || "http://190.92.233.232").replace(/\/+$/, "");
@@ -158,6 +159,48 @@ function pickClaim(payload, keys) {
 }
 
 /**
+ * Employee id from the app's HRIS session (`X-KC-CI-Session`), confirmed by KelinConnect's
+ * `/api/auth/session-from-ci`. Only accepted when KelinConnect's user for that session is the same
+ * account as the bearer token (`userId` / `sub`), so a session can't vouch for someone else's token.
+ */
+async function employeeFromCiSession(request, payload) {
+    const ciSession = String(request.headers.get("x-kc-ci-session") || "").trim();
+    if (!/^[A-Za-z0-9,-]{16,128}$/.test(ciSession)) return null;
+    const tokenUserId = pickClaim(payload, ["userId", "userid", "sub"]);
+    if (!tokenUserId) return null;
+
+    const url = String(process.env.KC_CI_SESSION_URL || "").trim() || `${KC_ORIGIN}/api/auth/session-from-ci`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                Cookie: `ci_session=${ciSession}`,
+            },
+            body: "{}",
+            redirect: "manual",
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        if (!res.ok) return null;
+        const body = await res.json().catch(() => null);
+        const user = body?.user || body?.data?.user;
+        if (!user || typeof user !== "object" || String(user.id || "") !== tokenUserId) return null;
+        const loginId = pickClaim(user, ["employee_id", "employeeId", "loginid", "LOGINID", "workcode"]).toUpperCase();
+        if (!/^[A-Z0-9_-]{2,32}$/.test(loginId)) return null;
+        return { loginId, name: pickClaim(user, NAME_KEYS) };
+    } catch (err) {
+        console.warn("[KC Inventory auth] session-from-ci failed", err?.message || err);
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
  * Employee id the app read at sign-in (`X-KC-Login-Id`). Only consulted after the token itself
  * was verified and names no employee, and only when KC_TRUST_APP_LOGIN_ID=1: the header is
  * client-supplied, so any signed-in employee could otherwise claim another employee's id.
@@ -214,6 +257,10 @@ export async function requireInventoryUser(request) {
             if (!verified && !signed) {
                 cache.delete(key);
                 throw new HttpError(401, "Your KelinConnect session has expired. Please sign in again.");
+            }
+            if (!verified?.loginId) {
+                const fromCi = await employeeFromCiSession(request, decoded.payload);
+                if (fromCi) verified = { loginId: fromCi.loginId, name: fromCi.name || verified?.name || "" };
             }
             if (cache.size > 2000) cache.clear();
             if (verified) cache.set(key, { until: Date.now() + VERIFY_TTL_MS, identity: verified });
