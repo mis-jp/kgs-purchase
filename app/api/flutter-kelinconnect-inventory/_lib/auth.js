@@ -66,7 +66,13 @@ function verifyHs256(decoded, secret) {
     return given.length === expected.length && crypto.timingSafeEqual(given, expected);
 }
 
+/**
+ * Asks KelinConnect whether the token is valid. Returns `null` when rejected, otherwise
+ * `{ loginId, name }` from the first reply that names the employee (empty when none does).
+ * Later URLs are only tried for the identity once the token is accepted.
+ */
 async function kelinConnectAccepts(token) {
+    let accepted = null;
     for (const url of verifyUrls()) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
@@ -82,11 +88,16 @@ async function kelinConnectAccepts(token) {
                 cache: "no-store",
                 signal: controller.signal,
             });
-            if (res.status === 401 || res.status === 403) return false;
+            if (res.status === 401 || res.status === 403) {
+                if (!accepted) return null;
+                continue;
+            }
             if (res.ok) {
                 const body = await res.json().catch(() => null);
                 if (body && (body.authenticated === false || body.success === false)) continue;
-                return true;
+                const identity = identityFrom(body);
+                if (identity.loginId) return { loginId: identity.loginId, name: identity.name || accepted?.name || "" };
+                accepted = { loginId: "", name: accepted?.name || identity.name };
             }
         } catch (err) {
             console.warn("[KC Inventory auth] verify failed", url, err?.message || err);
@@ -94,11 +105,49 @@ async function kelinConnectAccepts(token) {
             clearTimeout(timer);
         }
     }
-    return false;
+    return accepted;
+}
+
+const LOGIN_ID_KEYS = [
+    "loginid", "loginId", "LOGINID", "login_id", "employeeId", "employee_id",
+    "workcode", "WORKCODE", "username",
+];
+const NAME_KEYS = ["name", "fullName", "full_name", "fullname", "FULLNAME", "displayName", "employeeName"];
+
+/** Objects in a KelinConnect reply that may describe the signed-in employee. */
+function replySources(body) {
+    const out = [];
+    const add = (value) => {
+        const obj = Array.isArray(value) ? value[0] : value;
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) out.push(obj);
+    };
+    add(body);
+    for (const key of ["user", "employee", "profile", "session", "data", "items", "rows", "deductions"]) {
+        add(body[key]);
+    }
+    const data = Array.isArray(body.data) ? body.data[0] : body.data;
+    if (data && typeof data === "object") {
+        for (const key of ["user", "employee", "profile"]) add(data[key]);
+    }
+    if (body.session && typeof body.session === "object") add(body.session.user);
+    return out;
+}
+
+function identityFrom(body) {
+    if (!body || typeof body !== "object") return { loginId: "", name: "" };
+    let loginId = "";
+    let name = "";
+    for (const src of replySources(body)) {
+        loginId ||= pickClaim(src, LOGIN_ID_KEYS);
+        name ||= pickClaim(src, NAME_KEYS);
+        if (loginId && name) break;
+    }
+    return { loginId, name };
 }
 
 function pickClaim(payload, keys) {
-    const sources = [payload, payload.user, payload.data].filter((s) => s && typeof s === "object");
+    const sources = [payload, payload.user, payload.data, payload.data?.user, payload.session?.user]
+        .filter((s) => s && typeof s === "object");
     for (const src of sources) {
         for (const key of keys) {
             const value = src[key];
@@ -108,14 +157,13 @@ function pickClaim(payload, keys) {
     return "";
 }
 
-function userFromPayload(payload, request) {
-    const loginId = pickClaim(payload, [
-        "loginid", "loginId", "LOGINID", "login_id", "employeeId", "employee_id",
-        "workcode", "WORKCODE", "username", "sub", "id",
-    ]);
-    const tokenName = pickClaim(payload, [
-        "name", "fullName", "full_name", "fullname", "FULLNAME", "displayName", "employeeName",
-    ]);
+/**
+ * Login id (employee id such as KG0751) from the token, else from KelinConnect's verify reply.
+ * `sub` / `id` are only a last resort: KelinConnect uses UUIDs there, not employee ids.
+ */
+function userFromPayload(payload, request, verified) {
+    const loginId = pickClaim(payload, LOGIN_ID_KEYS) || verified?.loginId || pickClaim(payload, ["sub", "id"]);
+    const tokenName = pickClaim(payload, NAME_KEYS) || verified?.name || "";
     const headerName = String(request.headers.get("x-kc-user-name") || "").trim().slice(0, 120);
     return {
         loginId: loginId || "unknown",
@@ -138,26 +186,29 @@ export async function requireInventoryUser(request) {
     }
 
     const secret = String(process.env.KC_JWT_SECRET || "").trim();
-    if (secret) {
-        if (!verifyHs256(decoded, secret)) {
-            throw new HttpError(401, "Your KelinConnect session is not valid. Please sign in again.");
-        }
-    } else {
+    const signed = secret ? verifyHs256(decoded, secret) : false;
+    if (secret && !signed) {
+        throw new HttpError(401, "Your KelinConnect session is not valid. Please sign in again.");
+    }
+    let verified = null;
+    if (!signed || !pickClaim(decoded.payload, LOGIN_ID_KEYS)) {
         const cache = tokenCache();
         const key = crypto.createHash("sha256").update(token).digest("hex");
         const hit = cache.get(key);
-        if (!hit || hit.until < Date.now()) {
-            const accepted = await kelinConnectAccepts(token);
-            if (!accepted) {
+        if (hit && hit.until >= Date.now()) {
+            verified = hit.identity;
+        } else {
+            verified = await kelinConnectAccepts(token);
+            if (!verified && !signed) {
                 cache.delete(key);
                 throw new HttpError(401, "Your KelinConnect session has expired. Please sign in again.");
             }
             if (cache.size > 2000) cache.clear();
-            cache.set(key, { until: Date.now() + VERIFY_TTL_MS });
+            if (verified) cache.set(key, { until: Date.now() + VERIFY_TTL_MS, identity: verified });
         }
     }
 
-    return { user: userFromPayload(decoded.payload, request) };
+    return { user: userFromPayload(decoded.payload, request, verified) };
 }
 
 export function publicUser(ctx) {

@@ -1866,7 +1866,16 @@ const ALLOWED_ACTIONS = new Set([
   "searched",
   "downloaded",
   "reordered_media",
+  "added_folder",
+  "added_product",
+  "deleted_folder",
+  "deleted_product",
 ]);
+
+function actionList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((v) => String(v ?? "").trim()).filter(Boolean))].slice(0, 20);
+}
 
 export async function writeActionLog(body: Record<string, unknown>) {
   await ensureTables();
@@ -1890,13 +1899,33 @@ export async function writeActionLog(body: Record<string, unknown>) {
   return { id: logId, ok: true };
 }
 
-export async function listActionLogs(limit = 200) {
+/**
+ * Newest logs first. `actions` keeps only those action types; `excludeActions` drops them
+ * (the app uses it for its "Others" filter).
+ */
+export async function listActionLogs(
+  limit = 200,
+  filter: { actions?: unknown; excludeActions?: unknown } = {},
+) {
   await ensureTables();
   const lim = Math.max(1, Math.min(Number(limit) || 200, 500));
+  const actions = actionList(filter.actions);
+  const excluded = actionList(filter.excludeActions);
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (actions.length) {
+    clauses.push(`action IN (${actions.map(() => "?").join(",")})`);
+    params.push(...actions);
+  }
+  if (excluded.length) {
+    clauses.push(`action NOT IN (${excluded.map(() => "?").join(",")})`);
+    params.push(...excluded);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const [rows] = await getPool().query<RowDataPacket[]>(
     `SELECT id, action, actor_id, actor_name, target_id, target_name, detail, created_at
-     FROM inventory_action_logs ORDER BY created_at DESC LIMIT ?`,
-    [lim],
+     FROM inventory_action_logs ${where} ORDER BY created_at DESC LIMIT ?`,
+    [...params, lim],
   );
   return {
     logs: rows.map((r) => ({

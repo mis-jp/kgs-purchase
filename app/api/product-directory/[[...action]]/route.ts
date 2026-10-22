@@ -168,7 +168,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         if (!requireAdmin(req)) {
           return withCors(fail(403, "Admin token required"));
         }
-        return withCors(ok(await listActionLogs(Number(body.limit ?? 200))));
+        return withCors(
+          ok(
+            await listActionLogs(Number(body.limit ?? 200), {
+              actions: body.actions,
+              excludeActions: body.exclude_actions,
+            }),
+          ),
+        );
       }
       case "health":
       case "inventory_health": {

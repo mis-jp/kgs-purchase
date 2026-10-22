@@ -82,3 +82,33 @@ test('remote check: KelinConnect 401 rejects, 200 accepts and is cached', async 
     globalThis.fetch = realFetch;
   }
 });
+
+test('remote check: tries the next KelinConnect URL when the first reply has no employee id', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const body = String(url).includes('/api/auth/session')
+      ? { authenticated: true, user: { id: 'uuid-2', email: 'a@b.c' } }
+      : { success: true, data: [{ employee_id: 'KG0999', employee_name: 'Ana' }] };
+    return new Response(JSON.stringify(body), { status: 200 });
+  };
+  try {
+    const ctx = await requireInventoryUser(req(sign({ sub: 'uuid-2', exp: future() }, 'kc-secret-2')));
+    assert.equal(ctx.user.loginId, 'KG0999');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('remote check: employee id comes from the KelinConnect reply when the token has none', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ authenticated: true, user: { id: 'uuid-1', employee_id: 'KG0751', full_name: 'Carlo R' } }),
+    { status: 200 }
+  );
+  try {
+    const ctx = await requireInventoryUser(req(sign({ sub: 'uuid-1', exp: future() }, 'kc-secret')));
+    assert.deepEqual(ctx.user, { loginId: 'KG0751', name: 'Carlo R' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

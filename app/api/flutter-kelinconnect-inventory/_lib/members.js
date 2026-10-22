@@ -12,7 +12,9 @@ async function loadMember(user, request) {
     const pool = getLedgerPool();
     const loginId = String(user.loginId || "").toUpperCase();
     if (!loginId || loginId === "UNKNOWN") {
-        throw new HttpError(401, "Your KelinConnect session has no login id. Please sign in again.");
+        throw new HttpError(401,
+            "Inventory could not read your employee ID from your KelinConnect account (no login id). " +
+            "Please contact the Inventory admin.");
     }
     const bootstrapAdmin = adminLoginIds().has(loginId);
     const [res] = await pool.query(
@@ -59,23 +61,30 @@ export async function requireMember(request) {
     return loadMember(ctx.user, request);
 }
 
-/** Like requireMember, but falls back to a read-only viewer when the ledger is not set up. */
+function readOnlyViewer(user, ledger) {
+    return {
+        id: 0,
+        loginId: user.loginId,
+        name: user.name,
+        role: "viewer",
+        status: "active",
+        allBranches: true,
+        branchIds: new Set(),
+        branchCodes: [],
+        ledger,
+    };
+}
+
+/**
+ * Like requireMember, but for read-only pages: a read-only viewer when the ledger is not set up,
+ * or when the session has no login id to match an Inventory user (so lists still load).
+ */
 export async function optionalMember(request) {
     const ctx = await requireInventoryUser(request);
     const status = await ledgerStatus();
-    if (!status.ready) {
-        return {
-            id: 0,
-            loginId: ctx.user.loginId,
-            name: ctx.user.name,
-            role: "viewer",
-            status: "active",
-            allBranches: true,
-            branchIds: new Set(),
-            branchCodes: [],
-            ledger: false,
-        };
-    }
+    if (!status.ready) return readOnlyViewer(ctx.user, false);
+    const loginId = String(ctx.user.loginId || "").toUpperCase();
+    if (!loginId || loginId === "UNKNOWN") return readOnlyViewer(ctx.user, true);
     return loadMember(ctx.user, request);
 }
 

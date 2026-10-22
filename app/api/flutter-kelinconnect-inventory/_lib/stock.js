@@ -210,9 +210,30 @@ function groupedSql(src, where) {
              GROUP BY TRIM(s.inventory_id)`;
 }
 
+/**
+ * KelinConnect CMS catalog size (Product Database "Total Items"), one per SKU. Read-only;
+ * `null` when the CMS database is not reachable with this API's MySQL user.
+ */
+async function catalogProductCount() {
+    const db = String(process.env.MYSQL_INVENTORY_DATABASE || "db_kelin_inventory").replace(/`/g, "");
+    try {
+        const [[row]] = await getPool().query(
+            `SELECT COUNT(DISTINCT TRIM(inventory_id)) AS total
+               FROM \`${db}\`.product_inventory_items
+              WHERE deleted_at IS NULL AND TRIM(COALESCE(inventory_id, '')) <> ''`
+        );
+        return num(row?.total);
+    } catch (err) {
+        console.warn("[KC Inventory] catalog count unavailable", err?.code || err?.message || err);
+        return null;
+    }
+}
+
 export async function getSummary({ branch, search, category }) {
     const src = await stockSource();
     const { where, params } = buildFilter(src, { branch, search, category });
+    const unfiltered = !branch && !search && !category;
+    const catalogProducts = unfiltered ? await catalogProductCount() : null;
     const [[row]] = await getPool().query(
         `SELECT COUNT(*) AS products,
                 COALESCE(SUM(g.on_hand), 0) AS on_hand,
@@ -226,6 +247,7 @@ export async function getSummary({ branch, search, category }) {
     );
     return {
         products: num(row?.products),
+        catalogProducts,
         onHand: num(row?.on_hand),
         available: num(row?.available),
         healthy: num(row?.healthy),
@@ -278,12 +300,13 @@ export async function listItems({ branch, search, category, status, page, pageSi
     };
 }
 
-export async function listCategories({ branch }) {
+/** Counts match what the item list shows for the same branch / search / status. */
+export async function listCategories({ branch, search = "", status = "" }) {
     const src = await stockSource();
-    const { where, params } = buildFilter(src, { branch });
+    const { where, params } = buildFilter(src, { branch, search });
     const [rows] = await getPool().query(
         `SELECT COALESCE(g.item_class, c.cls, '') AS item_class, COUNT(*) AS item_count
-           FROM (${groupedSql(src, where)}) g
+           FROM (${groupedSql(src, where)} ${statusHaving(status)}) g
            LEFT JOIN (
                 SELECT TRIM(inventory_id) AS id, MAX(NULLIF(TRIM(item_class), '')) AS cls
                   FROM \`${STOCK_TABLE}\`

@@ -705,6 +705,9 @@ Server files are in `_lib/` of this folder; Flutter files are in `C:\product dir
 | `inv_watchlist` | `insights.js` (`setWatch`) | `insights.js`, item detail | item star, Watchlist page |
 | `inv_settings` | seed (§5.4), `admin.js` (`saveSettings`) | `ledger.js` (`getSettings`, cached) | admin → Settings |
 | `inv_audit_logs` | `audit.js` (`writeAudit`, append-only) | `insights.js` (`listAuditLogs`, user-activity report) | reports page → Audit log |
+| `db_kelin_inventory.product_inventory_items` (KelinConnect CMS, **read-only**) | never | `stock.js` `getSummary` → `catalogProducts` = `COUNT(DISTINCT inventory_id)` of non-deleted rows, all-branches unfiltered view only | home → Total products card |
+
+Notes: `GET /categories` takes the same `branch`, `search` and `status` as `GET /items`, so each category count matches the list it opens. The `catalogProducts` count needs SELECT on `db_kelin_inventory` (or `MYSQL_INVENTORY_DATABASE`) for this API's MySQL user; when it is missing, the field is `null` and the app falls back to the stocked-SKU count.
 
 ### 5.4 Seed data (run once)
 
