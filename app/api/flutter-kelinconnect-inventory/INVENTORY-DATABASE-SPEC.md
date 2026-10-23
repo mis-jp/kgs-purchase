@@ -697,7 +697,7 @@ Server files are in `_lib/` of this folder; Flutter files are in `C:\product dir
 | `inv_reason_codes` | seed only (§5.4) | `movements.js`, `transfers.js`, `adjustments.js` | stock form reason list |
 | `inv_transactions`, `inv_transaction_lines` | `ledger.js` via movements, transfers, adjustments, go-live | movements list, item history, activity, reports | Movements, item history, Recent activity |
 | `inv_transfers`, `inv_transfer_lines` | `transfers.js` | transfers, summary badges | Transfers pages |
-| `inv_count_sessions`, `inv_count_lines` | `ledger-counts.js` | counts, summary | Counts pages (live branches) |
+| `inv_count_sessions`, `inv_count_lines` | `ledger-counts.js` | counts, summary | Counts pages (all branches; non-live compare with Acumatica) |
 | `inv_adjustments`, `inv_adjustment_lines` | `adjustments.js`, `ledger-counts.js` (review) | approvals, reports | correction detail, Approvals |
 | `inv_discrepancy_cases`, `inv_case_notes` | `cases.js`, `transfers.js` (short receive), `ledger-counts.js` (review) | cases, summary | Cases pages |
 | `inv_attachments` | not built yet | – | – |
@@ -920,7 +920,7 @@ Code: `_lib/ledger.js` → `nextNumber(conn, prefix)`; movement prefixes are map
 6. Movements that happen during an open count: the adjustment uses `counted - system_qty_at_snapshot`, applied to the current balance (never overwrite with the counted number).
 
 As built (`_lib/ledger-counts.js`):
-- Live branches use `inv_count_sessions` / `inv_count_lines`; branches that are not live yet keep the first-version counts (`_lib/counts.js`, `kc_inventory_count_*`) so counting works before go-live. The API tells them apart with `source: "ledger" | "legacy"`.
+- Once the ledger database exists, every branch counts on `inv_count_sessions` / `inv_count_lines`, so counting works before go-live. Live branches take `system_qty` from `inv_balances`; branches that are not live take it from Acumatica on-hand (`forecast_item_stock`, read-only; missing products are added to `inv_products` as go-live does). Reviewing a count at a non-live branch creates no adjustment and changes no stock; it returns `{ adjustment: null, differences, cases, stockSource: "acumatica" }` and still opens cases for big shortages. Before the ledger exists, counts use the first-version tables (`_lib/counts.js`, `kc_inventory_count_*`); the API tells them apart with `source: "ledger" | "legacy"`.
 - Line filters: `all, pending, counted, matched, short, over, missing`. `counted` is what blind counters see (they cannot know short / over).
 - `PUT counts/{id}/lines` while the count is `open` → staff+ save `countedQty` (audit `count.line_save`). While `submitted` → only an approver may save; the value goes to `recount_qty` (audit `count.recount`). `clear` on a submitted line removes the recount.
 - `POST counts/{id}/review` (approver, not blocked by being the starter) → returns `{ count, adjustment: { id, number, autoApproved, cases } | null }`. The adjustment follows §6.5 (auto-approved when every difference is within `adjustment_auto_approve_units`).
