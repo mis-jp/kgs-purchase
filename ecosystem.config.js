@@ -5,6 +5,19 @@ require("dotenv").config({ path: path.join(__dirname, ".env.local"), override: f
 
 const appDir = __dirname;
 
+const INVENTORY_ENV_KEYS = [
+  "KC_INVENTORY_ADMIN_LOGIN_IDS",
+  "MYSQL_KC_INVENTORY_DATABASE",
+  "KC_ORIGIN",
+  "KC_AUTH_VERIFY_URLS",
+  "KC_CI_SESSION_URL",
+  "KC_JWT_SECRET",
+  "KC_TRUST_APP_LOGIN_ID",
+];
+const inventoryEnv = Object.fromEntries(
+  INVENTORY_ENV_KEYS.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])
+);
+
 module.exports = {
   apps: [
     {
@@ -35,6 +48,7 @@ module.exports = {
         NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
         NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
         SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+        ...inventoryEnv,
       },
       watch: false,
       autorestart: true,
