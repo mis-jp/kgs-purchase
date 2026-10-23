@@ -3,8 +3,9 @@ import { HttpError } from "./errors.js";
 import { getLedgerPool, withLedgerTx } from "./ledger-db.js";
 import { writeAudit } from "./audit.js";
 import { assertApprove, assertOperate } from "./members.js";
-import { findBranch, findByRequestId, getSettings, nextNumber, raiseAlert, requireLive } from "./ledger.js";
+import { findBranch, findByRequestId, getSettings, nextNumber, raiseAlert } from "./ledger.js";
 import { createAdjustmentRecord } from "./adjustments.js";
+import { erpRowsWhere, STOCK } from "./admin.js";
 import { createCase } from "./cases.js";
 import { canApprove, countLineDifference, iso, num, person } from "./rules.js";
 
@@ -183,7 +184,7 @@ export async function startLedgerCount(member, body, request) {
         const existing = await findByRequestId(conn, "inv_count_sessions", requestId);
         if (existing) return Number(existing.id);
         const branch = await findBranch(conn, body.branch);
-        requireLive(branch);
+        if (branch.status !== "active") throw new HttpError(409, `${branch.name} is inactive.`);
         assertOperate(member, branch, request, "count.start");
         const settings = await getSettings(conn);
         const blind = body.blind === undefined ? num(settings.count_blind_default) === 1 : body.blind === true;
@@ -204,8 +205,32 @@ export async function startLedgerCount(member, body, request) {
             locationId = Number(loc.id);
         }
 
+        // Live branches count against the app's stock; others against Acumatica on-hand (read-only).
+        let stockJoin;
+        let params;
+        if (branch.live) {
+            stockJoin = "LEFT JOIN inv_balances bal ON bal.product_id = p.id AND bal.branch_id = ?";
+            params = [branch.id, branch.id];
+        } else {
+            const erp = erpRowsWhere("s");
+            const warehouse = String(branch.erpWarehouseId || branch.code).toUpperCase();
+            await conn.query(
+                `INSERT IGNORE INTO inv_products (sku, name, unit_code, erp_inventory_id, status, created_by)
+                 SELECT x.inv, COALESCE(x.item_name, x.inv), 'PC', x.inv, 'active', 'count'
+                   FROM (SELECT CONVERT(TRIM(s.inventory_id) USING utf8mb4) COLLATE utf8mb4_unicode_ci AS inv,
+                                MAX(NULLIF(TRIM(s.item_name), '')) AS item_name
+                           FROM ${STOCK} s WHERE ${erp.where} AND UPPER(TRIM(s.warehouse_id)) = ?
+                          GROUP BY inv) x`,
+                [...erp.params, warehouse]
+            );
+            stockJoin = `LEFT JOIN (
+                    SELECT CONVERT(TRIM(s.inventory_id) USING utf8mb4) COLLATE utf8mb4_unicode_ci AS inv,
+                           SUM(GREATEST(COALESCE(s.on_hand, 0), 0)) AS qty_on_hand
+                      FROM ${STOCK} s WHERE ${erp.where} AND UPPER(TRIM(s.warehouse_id)) = ?
+                     GROUP BY inv) bal ON bal.inv = p.erp_inventory_id`;
+            params = [...erp.params, warehouse, branch.id];
+        }
         const where = ["p.status = 'active'"];
-        const params = [branch.id, branch.id];
         if (categoryId) {
             where.push("p.category_id = ?");
             params.push(categoryId);
@@ -218,7 +243,7 @@ export async function startLedgerCount(member, body, request) {
         const [items] = await conn.query(
             `SELECT p.id, COALESCE(bal.qty_on_hand, 0) AS qty, pbs.default_location_id
                FROM inv_products p
-               LEFT JOIN inv_balances bal ON bal.product_id = p.id AND bal.branch_id = ?
+               ${stockJoin}
                LEFT JOIN inv_product_branch_settings pbs ON pbs.product_id = p.id AND pbs.branch_id = ?
               WHERE ${where.join(" AND ")}
               ORDER BY p.sku LIMIT 20000`,
@@ -411,7 +436,8 @@ export async function reviewLedgerCount(member, id, body, request) {
         }
 
         let adjustment = null;
-        if (diffs.length) {
+        let cases = 0;
+        if (diffs.length && branch.live) {
             adjustment = await createAdjustmentRecord(conn, member, {
                 branch,
                 source: "count",
@@ -426,25 +452,24 @@ export async function reviewLedgerCount(member, id, body, request) {
                     note: line.note || null,
                 })),
             }, request);
-            let cases = 0;
-            for (const { line, diff } of diffs) {
-                if (Math.abs(diff) > caseAbove && diff < 0) {
-                    const c = await createCase(conn, member, {
-                        branchId: branch.id, productId: line.product_id, source: "count", sourceId: id,
-                        expectedQty: num(line.system_qty), physicalQty: num(line.system_qty) + diff,
-                        note: `${row.count_number}: expected ${num(line.system_qty)}, found ${num(line.system_qty) + diff}.`,
-                    });
-                    cases += 1;
-                    await raiseAlert(conn, {
-                        type: "count_variance", severity: num(line.is_missing) === 1 ? "critical" : "warning",
-                        branchId: branch.id, productId: line.product_id, entityType: "case", entityId: c.id,
-                        message: `${line.name} (${line.sku}) at ${branch.name}: ${Math.abs(diff)} short in ${row.count_number}. Case ${c.number}.`,
-                        dedupeKey: `case:${c.id}`,
-                    });
-                }
-            }
-            adjustment.cases = cases;
         }
+        for (const { line, diff } of diffs) {
+            if (Math.abs(diff) > caseAbove && diff < 0) {
+                const c = await createCase(conn, member, {
+                    branchId: branch.id, productId: line.product_id, source: "count", sourceId: id,
+                    expectedQty: num(line.system_qty), physicalQty: num(line.system_qty) + diff,
+                    note: `${row.count_number}: expected ${num(line.system_qty)}, found ${num(line.system_qty) + diff}.`,
+                });
+                cases += 1;
+                await raiseAlert(conn, {
+                    type: "count_variance", severity: num(line.is_missing) === 1 ? "critical" : "warning",
+                    branchId: branch.id, productId: line.product_id, entityType: "case", entityId: c.id,
+                    message: `${line.name} (${line.sku}) at ${branch.name}: ${Math.abs(diff)} short in ${row.count_number}. Case ${c.number}.`,
+                    dedupeKey: `case:${c.id}`,
+                });
+            }
+        }
+        if (adjustment) adjustment.cases = cases;
         await conn.query(
             `UPDATE inv_balances bal JOIN inv_count_lines l ON l.product_id = bal.product_id AND bal.branch_id = ?
                 SET bal.last_counted_at = UTC_TIMESTAMP()
@@ -459,7 +484,7 @@ export async function reviewLedgerCount(member, id, body, request) {
             action: "count.review", entityType: "count", entityId: id, branchId: branch.id, request,
             details: { number: row.count_number, differences: diffs.length, adjustment: adjustment?.number || null },
         });
-        return adjustment;
+        return { adjustment, differences: diffs.length, cases, stockSource: branch.live ? "app" : "acumatica" };
     });
-    return { count: await loadSession(getLedgerPool(), id, member), adjustment: result };
+    return { count: await loadSession(getLedgerPool(), id, member), ...result };
 }

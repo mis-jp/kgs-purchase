@@ -12,11 +12,11 @@ import { adminLoginIds, iso, num, ROLES } from "./rules.js";
 const CMS_DB = /^[A-Za-z0-9_]+$/.test(String(process.env.MYSQL_INVENTORY_DATABASE || ""))
     ? process.env.MYSQL_INVENTORY_DATABASE
     : "db_kelin_inventory";
-const STOCK = `\`${PURCHASE_DB}\`.\`forecast_item_stock\``;
+export const STOCK = `\`${PURCHASE_DB}\`.\`forecast_item_stock\``;
 const ECOM = [...ECOM_BRANCH_ALIASES];
 
 /** Same row rules as stock.js baseWhere, for read-only imports from Purchase. */
-function erpRowsWhere(alias = "s") {
+export function erpRowsWhere(alias = "s") {
     const wh = `UPPER(TRIM(${alias}.warehouse_id))`;
     const clauses = [
         `${alias}.warehouse_id <> '__catalog__'`,
