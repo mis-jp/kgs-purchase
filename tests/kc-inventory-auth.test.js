@@ -175,6 +175,35 @@ test('remote check: employee id from session-from-ci only when it is the same ac
   }
 });
 
+test('remote check: a reply without an employee id is retried after a short wait, not 5 minutes', async () => {
+  const realFetch = globalThis.fetch;
+  const realNow = Date.now;
+  let ciUp = false;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/api/auth/session-from-ci')) {
+      return ciUp
+        ? new Response(JSON.stringify({ user: { id: 'uuid-10', employee_id: 'KG0751', full_name: 'John Paul' } }), { status: 200 })
+        : new Response('{}', { status: 502 });
+    }
+    return new Response(JSON.stringify({ authenticated: true, user: { id: 'uuid-10', email: 'x@y.z' } }), { status: 200 });
+  };
+  try {
+    const r = req(sign({ userId: 'uuid-10', exp: future() }, 'kc-secret-10'), { 'x-kc-ci-session': 'mine0123456789abcdef' });
+    assert.equal((await requireInventoryUser(r)).user.loginId, 'unknown');
+
+    ciUp = true;
+    Date.now = () => realNow() + 21_000;
+    assert.equal((await requireInventoryUser(r)).user.loginId, 'KG0751');
+
+    Date.now = () => realNow() + 4 * 60_000;
+    ciUp = false;
+    assert.equal((await requireInventoryUser(r)).user.loginId, 'KG0751', 'a found employee id stays cached');
+  } finally {
+    globalThis.fetch = realFetch;
+    Date.now = realNow;
+  }
+});
+
 test('remote check: employee id comes from the KelinConnect reply when the token has none', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(

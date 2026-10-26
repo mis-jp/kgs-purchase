@@ -1,5 +1,5 @@
 import { HttpError } from "./errors.js";
-import { getLedgerPool, ledgerStatus, withLedgerTx } from "./ledger-db.js";
+import { getLedgerPool, ledgerStatus, transferReferenceReady, withLedgerTx } from "./ledger-db.js";
 import { writeAudit } from "./audit.js";
 import { assertApprove, assertManager, scopeBranchIds } from "./members.js";
 import { findBranch, findProducts, getSettings, raiseAlert, requireLive } from "./ledger.js";
@@ -430,8 +430,10 @@ export async function buildReport(member, name, { branch, from, to }, request) {
         const fromClause = branchClause(branch, "fb.code");
         const toClause = branchClause(branch, "tb.code");
         const branchSql = branch ? `AND (${fromClause.sql.slice(4)} OR ${toClause.sql.slice(4)})` : "";
+        const reference = (await transferReferenceReady()) ? "t.reference_no" : "NULL";
         const [data] = await pool.query(
-            `SELECT t.requested_at, t.transfer_number, t.status, fb.code AS from_code, tb.code AS to_code, p.sku, p.name,
+            `SELECT t.requested_at, t.transfer_number, ${reference} AS reference_no, t.status, fb.code AS from_code,
+                    tb.code AS to_code, p.sku, p.name,
                     l.qty_requested, l.qty_sent, l.qty_received, t.requested_by, t.approved_by, t.dispatched_at, t.received_at
                FROM inv_transfer_lines l
                JOIN inv_transfers t ON t.id = l.transfer_id
@@ -442,7 +444,7 @@ export async function buildReport(member, name, { branch, from, to }, request) {
               ORDER BY t.requested_at LIMIT 100000`,
             [start, end, ...(branch ? [...fromClause.params, ...toClause.params] : [])]
         );
-        headers = ["Requested (UTC)", "Number", "Status", "From", "To", "SKU", "Description", "Requested", "Sent",
+        headers = ["Requested (UTC)", "Number", "Reference", "Status", "From", "To", "SKU", "Description", "Requested", "Sent",
             "Received", "Requested by", "Approved by", "Dispatched (UTC)", "Received (UTC)"];
         rows = data.map((r) => Object.values(r));
     } else {

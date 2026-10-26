@@ -22,6 +22,8 @@ const DEFAULT_VERIFY_PATHS = [
     "/api/payroll/me/deductions?page=1&limit=1",
 ];
 const VERIFY_TTL_MS = 5 * 60_000;
+/** A reply without an employee id is often a brief HRIS hiccup; retry soon instead of showing View only for minutes. */
+const MISSING_ID_TTL_MS = 20_000;
 const VERIFY_TIMEOUT_MS = 8_000;
 const cacheKey = "__kcInventoryTokenCache";
 
@@ -263,7 +265,10 @@ export async function requireInventoryUser(request) {
                 if (fromCi) verified = { loginId: fromCi.loginId, name: fromCi.name || verified?.name || "" };
             }
             if (cache.size > 2000) cache.clear();
-            if (verified) cache.set(key, { until: Date.now() + VERIFY_TTL_MS, identity: verified });
+            if (verified) {
+                const ttl = verified.loginId ? VERIFY_TTL_MS : MISSING_ID_TTL_MS;
+                cache.set(key, { until: Date.now() + ttl, identity: verified });
+            }
         }
     }
 

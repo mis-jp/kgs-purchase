@@ -3,7 +3,8 @@ import { HttpError } from "./errors.js";
 
 /**
  * Pool on the KelinConnect Inventory ledger database (`db_kc_inventory`, tables `inv_*`).
- * Created by hand from INVENTORY-DATABASE-SPEC.md; this code never creates or alters its tables.
+ * Created by hand from INVENTORY-DATABASE-SPEC.md. The only change this code makes to the tables is
+ * adding columns listed in the spec's "Later additions" when they are missing.
  * Sessions run in UTC so DEFAULT CURRENT_TIMESTAMP values are UTC.
  */
 
@@ -98,6 +99,35 @@ export async function ledgerStatus({ fresh = false } = {}) {
     const value = await probe();
     globalThis[statusKey] = { value, until: Date.now() + (value.ready ? STATUS_TTL_MS : 10_000) };
     return value;
+}
+
+const transferRefKey = "__kcInventoryTransferRef";
+
+/**
+ * Whether `inv_transfers.reference_no` exists, adding it once when missing. Uses the pool, never a
+ * transaction connection: ALTER TABLE commits implicitly in MySQL.
+ */
+export async function transferReferenceReady() {
+    const hit = globalThis[transferRefKey];
+    if (hit === true) return true;
+    if (hit && hit.until > Date.now()) return false;
+    const pool = getLedgerPool();
+    try {
+        const [rows] = await pool.query(
+            `SELECT 1 FROM information_schema.columns
+              WHERE table_schema = ? AND table_name = 'inv_transfers' AND column_name = 'reference_no'`,
+            [LEDGER_DB]
+        );
+        if (!rows.length) {
+            await pool.query("ALTER TABLE inv_transfers ADD COLUMN reference_no VARCHAR(100) NULL AFTER reason_code");
+        }
+        globalThis[transferRefKey] = true;
+        return true;
+    } catch (err) {
+        console.warn("[KC Inventory] transfer reference column", err?.message || err);
+        globalThis[transferRefKey] = { until: Date.now() + 10 * 60_000 };
+        return false;
+    }
 }
 
 export function invalidateLedgerStatus() {
