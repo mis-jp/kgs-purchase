@@ -204,6 +204,34 @@ test('remote check: a reply without an employee id is retried after a short wait
   }
 });
 
+test('remote check: a token keeps its employee id when a later lookup comes back empty', async () => {
+  const realFetch = globalThis.fetch;
+  const realNow = Date.now;
+  let ciUp = true;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/api/auth/session-from-ci')) {
+      return ciUp
+        ? new Response(JSON.stringify({ user: { id: 'uuid-11', employee_id: 'KG0751', full_name: 'John Paul' } }), { status: 200 })
+        : new Response('{}', { status: 502 });
+    }
+    return new Response(JSON.stringify({ authenticated: true, user: { id: 'uuid-11', email: 'x@y.z' } }), { status: 200 });
+  };
+  try {
+    const r = req(sign({ userId: 'uuid-11', exp: future() }, 'kc-secret-11'), { 'x-kc-ci-session': 'mine0123456789abcdef' });
+    assert.equal((await requireInventoryUser(r)).user.loginId, 'KG0751');
+
+    ciUp = false;
+    Date.now = () => realNow() + 6 * 60_000;
+    assert.equal((await requireInventoryUser(r)).user.loginId, 'KG0751', 'still the same employee after the 5-minute recheck');
+
+    Date.now = () => realNow() + 2 * 60 * 60_000;
+    await assert.rejects(requireInventoryUser(r), /expired/, 'an expired token is refused, not rescued');
+  } finally {
+    globalThis.fetch = realFetch;
+    Date.now = realNow;
+  }
+});
+
 test('remote check: employee id comes from the KelinConnect reply when the token has none', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(

@@ -25,11 +25,20 @@ const VERIFY_TTL_MS = 5 * 60_000;
 /** A reply without an employee id is often a brief HRIS hiccup; retry soon instead of showing View only for minutes. */
 const MISSING_ID_TTL_MS = 20_000;
 const VERIFY_TIMEOUT_MS = 8_000;
+/** Upper bound for remembering a token's employee id when the token has no `exp`. */
+const KNOWN_ID_MAX_MS = 12 * 60 * 60_000;
 const cacheKey = "__kcInventoryTokenCache";
+const knownKey = "__kcInventoryKnownIds";
 
 function tokenCache() {
     if (!globalThis[cacheKey]) globalThis[cacheKey] = new Map();
     return globalThis[cacheKey];
+}
+
+/** Employee id already matched to a token; a token never changes owner, so lookups that later come back empty reuse it. */
+function knownIds() {
+    if (!globalThis[knownKey]) globalThis[knownKey] = new Map();
+    return globalThis[knownKey];
 }
 
 function verifyUrls() {
@@ -263,6 +272,19 @@ export async function requireInventoryUser(request) {
             if (!verified?.loginId) {
                 const fromCi = await employeeFromCiSession(request, decoded.payload);
                 if (fromCi) verified = { loginId: fromCi.loginId, name: fromCi.name || verified?.name || "" };
+            }
+            const known = knownIds();
+            if (verified?.loginId) {
+                if (known.size > 2000) known.clear();
+                const until = Number.isFinite(exp) ? exp * 1000 : Date.now() + KNOWN_ID_MAX_MS;
+                known.set(key, { until, loginId: verified.loginId, name: verified.name || "" });
+            } else {
+                const prior = known.get(key);
+                if (prior && prior.until >= Date.now()) {
+                    verified = { loginId: prior.loginId, name: verified?.name || prior.name };
+                } else if (prior) {
+                    known.delete(key);
+                }
             }
             if (cache.size > 2000) cache.clear();
             if (verified) {
