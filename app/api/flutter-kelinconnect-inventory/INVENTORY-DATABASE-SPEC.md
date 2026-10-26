@@ -995,7 +995,7 @@ Every route below exists as `<path>/route.js` in this folder. "Approver" = manag
 | POST | `stock/receive` · `stock/release` | staff+ | `{ requestId, branch, reasonCode, referenceNo, notes, lines:[{inventoryId,qty,note}] }` → `{ movement }` | `pages/branch_inventory_stock_form_page.dart` |
 | GET | `movements?branch&type&status&search&from&to&page` | any | `{ movements, …paging }` | `pages/branch_inventory_documents_pages.dart` (Movements) |
 | GET | `movements/{id}` · POST `movements/{id}/approve` · `/reject {reason}` | approver for actions | `{ movement }` | movement detail, Approvals |
-| GET/POST | `transfers` (`status` incl. `active`, `direction=in\|out`) | staff+ at from-branch to create | create body `{ requestId, fromBranch, toBranch, reasonCode, notes, expectedArrival, lines:[{inventoryId,qty,note}] }` → `{ transfer }` | `pages/branch_inventory_transfers_page.dart` |
+| GET/POST | `transfers` (`status` incl. `active`, `direction=in\|out`) | staff+ at from-branch to create | create body `{ requestId, fromBranch, toBranch, reasonCode, referenceNo, notes, expectedArrival, lines:[{inventoryId,qty,note}] }` → `{ transfer }` | `pages/branch_inventory_transfers_page.dart` |
 | GET | `transfers/{id}` | any | `{ transfer }` | transfer detail |
 | POST | `transfers/{id}/approve\|reject\|cancel\|dispatch\|receive` | §6.2 | `{ reason }` or `{ lines:[{inventoryId,qty}] }` → `{ transfer }` | transfer detail buttons |
 | GET/POST | `adjustments` | list any / create staff+ | `{ requestId, branch, reasonCode, notes (required), lines:[{inventoryId,countedQty,note}] }` → `{ adjustment }` | stock form "Correct stock" |

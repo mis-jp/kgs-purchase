@@ -12,7 +12,8 @@ async function loadMember(user, request) {
     const pool = getLedgerPool();
     const loginId = String(user.loginId || "").toUpperCase();
     if (!loginId || loginId === "UNKNOWN") {
-        throw new HttpError(401,
+        // Not 401: the app answers 401 by fetching a new token, which restarts the employee id lookup.
+        throw new HttpError(403,
             "The Inventory server could not match your KelinConnect account to your employee ID (no login id).");
     }
     const bootstrapAdmin = adminLoginIds().has(loginId);
