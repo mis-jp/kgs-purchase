@@ -346,6 +346,7 @@ CREATE TABLE inv_transfers (
   to_branch_id      INT UNSIGNED NOT NULL,
   status            ENUM('draft','pending_approval','approved','in_transit','received','partially_received','rejected','cancelled') NOT NULL DEFAULT 'draft',
   reason_code       VARCHAR(40)  NULL,
+  reference_no      VARCHAR(100) NULL,
   notes             VARCHAR(1000) NULL,
   expected_arrival  DATE         NULL,
   request_id        CHAR(36)     NOT NULL,
@@ -869,6 +870,16 @@ The first version created `db_purchase.kc_inventory_count_sessions` and `db_purc
 DROP TABLE IF EXISTS db_purchase.kc_inventory_count_lines;
 DROP TABLE IF EXISTS db_purchase.kc_inventory_count_sessions;
 ```
+
+### 5.8 Later additions
+
+Columns added after the first install. The server adds a missing one by itself on first use (it needs `ALTER` on `db_kc_inventory`); you can also run it by hand:
+
+```sql
+ALTER TABLE inv_transfers ADD COLUMN reference_no VARCHAR(100) NULL AFTER reason_code;
+```
+
+`reference_no` is required on a transfer when its reason has `requires_reference = 1` (e.g. `CUSTOMER_ORDER`). Without the column, the server writes the reference at the start of the transfer notes instead.
 
 ---
 

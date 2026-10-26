@@ -2,6 +2,7 @@ import { ECOM_BRANCH_ALIASES, EXCLUDED_BRANCH_KEYWORDS } from "@/lib/companies";
 import { getPool, STOCK_TABLE } from "./db";
 import { HttpError } from "./http";
 import { ledgerStatus, ledgerTable } from "./ledger-db.js";
+import { getSettings } from "./ledger.js";
 
 /**
  * Stock views. Branches that are live on the Inventory ledger read `db_kc_inventory.inv_balances`;
@@ -108,17 +109,29 @@ function buildFilter(src, { branch = "", search = "", category = "", ids = null 
     return { where: clauses.length ? clauses.join(" AND ") : "1 = 1", params };
 }
 
-function statusHaving(status) {
+/** The admin "Low stock below" setting when the ledger is set up, else LOW_STOCK_BELOW. */
+export async function lowStockBelow() {
+    try {
+        if (!(await ledgerStatus()).ready) return LOW_STOCK_BELOW;
+        const value = Number((await getSettings()).low_stock_default);
+        return Number.isFinite(value) && value > 0 ? value : LOW_STOCK_BELOW;
+    } catch (err) {
+        console.warn("[KC Inventory] low stock setting", err?.message || err);
+        return LOW_STOCK_BELOW;
+    }
+}
+
+function statusHaving(status, limit) {
     if (status === "out_of_stock") return "HAVING on_hand <= 0";
-    if (status === "low_stock") return `HAVING on_hand > 0 AND on_hand < ${LOW_STOCK_BELOW}`;
-    if (status === "healthy") return `HAVING on_hand >= ${LOW_STOCK_BELOW}`;
+    if (status === "low_stock") return `HAVING on_hand > 0 AND on_hand < ${limit}`;
+    if (status === "healthy") return `HAVING on_hand >= ${limit}`;
     return "";
 }
 
-export function stockStatus(onHand) {
+export function stockStatus(onHand, limit = LOW_STOCK_BELOW) {
     const qty = Number(onHand) || 0;
     if (qty <= 0) return "out_of_stock";
-    if (qty < LOW_STOCK_BELOW) return "low_stock";
+    if (qty < limit) return "low_stock";
     return "healthy";
 }
 
@@ -234,12 +247,13 @@ export async function getSummary({ branch, search, category }) {
     const { where, params } = buildFilter(src, { branch, search, category });
     const unfiltered = !branch && !search && !category;
     const catalogProducts = unfiltered ? await catalogProductCount() : null;
+    const limit = await lowStockBelow();
     const [[row]] = await getPool().query(
         `SELECT COUNT(*) AS products,
                 COALESCE(SUM(g.on_hand), 0) AS on_hand,
                 COALESCE(SUM(g.available), 0) AS available,
-                COALESCE(SUM(g.on_hand >= ${LOW_STOCK_BELOW}), 0) AS healthy,
-                COALESCE(SUM(g.on_hand > 0 AND g.on_hand < ${LOW_STOCK_BELOW}), 0) AS low_stock,
+                COALESCE(SUM(g.on_hand >= ${limit}), 0) AS healthy,
+                COALESCE(SUM(g.on_hand > 0 AND g.on_hand < ${limit}), 0) AS low_stock,
                 COALESCE(SUM(g.on_hand <= 0), 0) AS out_of_stock,
                 MAX(g.last_sync) AS last_sync
            FROM (${groupedSql(src, where)}) g`,
@@ -254,7 +268,7 @@ export async function getSummary({ branch, search, category }) {
         lowStock: num(row?.low_stock),
         outOfStock: num(row?.out_of_stock),
         lastSync: iso(row?.last_sync),
-        lowStockBelow: LOW_STOCK_BELOW,
+        lowStockBelow: limit,
         liveBranches: src.live.length,
         branchLive: !!branch && src.live.some((b) => b.code === branch.toUpperCase()),
     };
@@ -263,7 +277,8 @@ export async function getSummary({ branch, search, category }) {
 export async function listItems({ branch, search, category, status, page, pageSize, ids = null }) {
     const src = await stockSource();
     const { where, params } = buildFilter(src, { branch, search, category, ids });
-    const having = statusHaving(status);
+    const limit = await lowStockBelow();
+    const having = statusHaving(status, limit);
     const offset = (page - 1) * pageSize;
     const pool = getPool();
     const [rows] = await pool.query(
@@ -287,7 +302,7 @@ export async function listItems({ branch, search, category, status, page, pageSi
                 itemClass: r.item_class || extra.itemClass || "",
                 onHand,
                 available: num(r.available),
-                status: stockStatus(onHand),
+                status: stockStatus(onHand, limit),
                 branchCount: num(r.branch_count),
                 branchesInStock: num(r.branches_in_stock),
                 lastSync: iso(r.last_sync),
@@ -304,9 +319,10 @@ export async function listItems({ branch, search, category, status, page, pageSi
 export async function listCategories({ branch, search = "", status = "" }) {
     const src = await stockSource();
     const { where, params } = buildFilter(src, { branch, search });
+    const limit = await lowStockBelow();
     const [rows] = await getPool().query(
         `SELECT COALESCE(g.item_class, c.cls, '') AS item_class, COUNT(*) AS item_count
-           FROM (${groupedSql(src, where)} ${statusHaving(status)}) g
+           FROM (${groupedSql(src, where)} ${statusHaving(status, limit)}) g
            LEFT JOIN (
                 SELECT TRIM(inventory_id) AS id, MAX(NULLIF(TRIM(item_class), '')) AS cls
                   FROM \`${STOCK_TABLE}\`
@@ -342,12 +358,13 @@ export async function getItem(inventoryId) {
     );
     const info = (await catalogInfo([inventoryId])).get(inventoryId.toUpperCase());
     if (!rows.length && !info) throw new HttpError(404, `Item ${inventoryId} was not found.`);
+    const limit = await lowStockBelow();
 
     const branches = rows.map((r) => ({
         branch: r.branch,
         onHand: num(r.on_hand),
         available: num(r.available),
-        status: stockStatus(r.on_hand),
+        status: stockStatus(r.on_hand, limit),
         lastSync: iso(r.last_sync),
         source: r.source,
     }));
@@ -360,7 +377,7 @@ export async function getItem(inventoryId) {
         itemStatus: first.item_status || "",
         onHand,
         available: branches.reduce((sum, b) => sum + b.available, 0),
-        status: stockStatus(onHand),
+        status: stockStatus(onHand, limit),
         branchCount: branches.length,
         branchesInStock: branches.filter((b) => b.onHand > 0).length,
         lastSync: branches.reduce((latest, b) => (b.lastSync && (!latest || b.lastSync > latest) ? b.lastSync : latest), null),

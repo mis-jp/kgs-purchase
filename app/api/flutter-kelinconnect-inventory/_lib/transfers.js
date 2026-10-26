@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { HttpError } from "./errors.js";
-import { getLedgerPool, withLedgerTx } from "./ledger-db.js";
+import { getLedgerPool, transferReferenceReady, withLedgerTx } from "./ledger-db.js";
 import { writeAudit } from "./audit.js";
 import { assertApprove, assertOperate } from "./members.js";
 import {
@@ -41,6 +41,7 @@ function mapTransfer(r) {
         toBranchName: r.to_name,
         reasonCode: r.reason_code || "",
         reasonLabel: r.reason_label || r.reason_code || "",
+        referenceNo: r.reference_no || "",
         notes: r.notes || "",
         rejectionReason: r.rejection_reason || "",
         expectedArrival: r.expected_arrival ? iso(r.expected_arrival)?.slice(0, 10) : null,
@@ -144,8 +145,11 @@ export async function listTransfers({ branch, status, direction, page, pageSize 
 export async function createTransfer(member, body, request) {
     const requestId = requireRequestId(body.requestId);
     const lines = normalizeLines(body.lines);
-    const notes = String(body.notes || "").trim().slice(0, 1000) || null;
+    const referenceNo = String(body.referenceNo || "").trim().slice(0, 100) || null;
     const expected = /^\d{4}-\d{2}-\d{2}$/.test(String(body.expectedArrival || "")) ? body.expectedArrival : null;
+    const refColumn = await transferReferenceReady();
+    let notes = String(body.notes || "").trim().slice(0, 1000) || null;
+    if (referenceNo && !refColumn) notes = `Ref ${referenceNo}${notes ? ` · ${notes}` : ""}`.slice(0, 1000);
 
     const id = await withLedgerTx(async (conn) => {
         const existing = await findByRequestId(conn, "inv_transfers", requestId);
@@ -157,14 +161,18 @@ export async function createTransfer(member, body, request) {
         requireLive(to);
         assertOperate(member, from, request, "transfer.create");
         const reason = await findReason(conn, body.reasonCode || "REPLENISHMENT", "transfer");
+        if (reason.requiresReference && !referenceNo) {
+            throw new HttpError(400, `${reason.label} needs a reference number (DR, invoice, or OR).`);
+        }
         const products = await findProducts(conn, lines.map((l) => l.ref));
         const number = await nextNumber(conn, "TRF");
         const [res] = await conn.query(
             `INSERT INTO inv_transfers
-                (transfer_number, from_branch_id, to_branch_id, status, reason_code, notes, expected_arrival,
-                 request_id, requested_by, requested_by_name)
-             VALUES (?, ?, ?, 'pending_approval', ?, ?, ?, ?, ?, ?)`,
-            [number, from.id, to.id, reason.code, notes, expected, requestId, member.loginId, member.name]
+                (transfer_number, from_branch_id, to_branch_id, status, reason_code, ${refColumn ? "reference_no, " : ""}notes,
+                 expected_arrival, request_id, requested_by, requested_by_name)
+             VALUES (?, ?, ?, 'pending_approval', ?, ${refColumn ? "?, " : ""}?, ?, ?, ?, ?)`,
+            [number, from.id, to.id, reason.code, ...(refColumn ? [referenceNo] : []), notes, expected, requestId,
+                member.loginId, member.name]
         );
         for (const line of lines) {
             await conn.query(
@@ -174,7 +182,7 @@ export async function createTransfer(member, body, request) {
         }
         await writeAudit(conn, member, {
             action: "transfer.create", entityType: "transfer", entityId: res.insertId, branchId: from.id, requestId, request,
-            details: { number, to: to.code, lines: lines.map((l) => ({ sku: l.ref, qty: l.qty })) },
+            details: { number, to: to.code, referenceNo, lines: lines.map((l) => ({ sku: l.ref, qty: l.qty })) },
         });
         return res.insertId;
     });
