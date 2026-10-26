@@ -7,6 +7,7 @@ import {
   calcOrderWeightKg,
   poDetailHref,
   isEtdBeyondContainer,
+  isEtdBeyondOrderStatus,
   poDetailUrl,
   filterAnnotationsForOrder,
   pickOrderAnnotation,
@@ -53,11 +54,19 @@ test('poDetailHref encodes the order number', () => {
   assert.equal(poDetailHref(''), '');
 });
 
-test('isEtdBeyondContainer counts ETD today or later, not past ETD', () => {
-  assert.equal(isEtdBeyondContainer('2026-10-20', '2026-10-19'), true);
-  assert.equal(isEtdBeyondContainer('2026-10-19', '2026-10-19'), true);
-  assert.equal(isEtdBeyondContainer('2026-10-18', '2026-10-19'), false);
-  assert.equal(isEtdBeyondContainer('', '2026-10-19'), false);
+test('isEtdBeyondContainer counts only ETD that has already passed', () => {
+  assert.equal(isEtdBeyondContainer('2026-10-25', '2026-10-26'), true);
+  assert.equal(isEtdBeyondContainer('2026-10-26', '2026-10-26'), false);
+  assert.equal(isEtdBeyondContainer('2026-10-27', '2026-10-26'), false);
+  assert.equal(isEtdBeyondContainer('', '2026-10-26'), false);
+});
+
+test('isEtdBeyondOrderStatus keeps Open POs only', () => {
+  assert.equal(isEtdBeyondOrderStatus('Open'), true);
+  assert.equal(isEtdBeyondOrderStatus(' open '), true);
+  assert.equal(isEtdBeyondOrderStatus('Closed'), false);
+  assert.equal(isEtdBeyondOrderStatus(''), false);
+  assert.equal(isEtdBeyondOrderStatus(null), false);
 });
 
 test('poDetailUrl prefixes the deploy base path', () => {

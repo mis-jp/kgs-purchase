@@ -5182,7 +5182,8 @@ export const MySqlService = {
                 const slice = ids.slice(i, i + CHUNK);
                 const placeholders = slice.map(() => "?").join(",");
                 const [rows] = await purchasePool.query(
-                    `SELECT order_nbr AS orderNbr, promised_date AS promisedDate, receipt_date AS receiptDate
+                    `SELECT order_nbr AS orderNbr, promised_date AS promisedDate, receipt_date AS receiptDate,
+                            status
                      FROM purchase_history
                      WHERE order_nbr IN (${placeholders})`,
                     slice
@@ -5192,6 +5193,7 @@ export const MySqlService = {
                     map[row.orderNbr] = {
                         etd: row.promisedDate || null,
                         receipt: row.receiptDate || null,
+                        status: row.status || null,
                     };
                 }
             }

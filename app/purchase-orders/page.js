@@ -5,7 +5,7 @@ import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import Link from "next/link";
-import { isEtdBeyondContainer, poDetailHref } from "@/lib/po-metrics";
+import { isEtdBeyondContainer, isEtdBeyondOrderStatus, poDetailHref } from "@/lib/po-metrics";
 import { formatWeightKg } from "@/lib/item-dimensions";
 import PoLinesTable from "@/components/PoLinesTable";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
@@ -319,7 +319,7 @@ function collectOverdueShipOuts(userInputs, asOf = todayIso()) {
  * Packing list: a container slot whose ETD (Promised On) is today or later (not yet passed)
  * and that slot still has no Received date.
  */
-function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf = todayIso()) {
+function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, statusByOrder, asOf = todayIso()) {
     const today = toDateKey(asOf) || todayIso();
     const seen = new Set();
     const orderNbrs = [];
@@ -328,6 +328,7 @@ function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf
         const nbr = orderNbrFromAnnotationRef(refId) || poAnnotationKey(refId);
         if (!nbr || seen.has(nbr)) continue;
         seen.add(nbr);
+        if (!isEtdBeyondOrderStatus(statusByOrder?.[nbr])) continue;
         const ui = getPoUserInputs(userInputs, nbr);
         const logistics = getLogisticsEntries(ui, receiptByOrder?.[nbr]);
         const etd = toDateKey(etdByOrder?.[nbr] || ui?.etd);
@@ -928,21 +929,21 @@ function EtdBeyondContainerPanel({ containerCount, orderCount, filtering, onTogg
                 </div>
                 <div>
                     <h2 id="po-etd-beyond-title">ETD Beyond the Container</h2>
-                    <p>Packing list containers whose ETD has not passed yet.</p>
+                    <p>Packing list containers whose ETD has passed but are not received yet.</p>
                 </div>
             </div>
             <div className="po-shipout-overdue-stats">
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{containerCount}</span>
-                    <span className="po-shipout-overdue-label">Containers with ETD not yet passed</span>
+                    <span className="po-shipout-overdue-label">Containers past ETD, not received</span>
                 </div>
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{orderCount}</span>
-                    <span className="po-shipout-overdue-label">Orders with a container whose ETD has not passed</span>
+                    <span className="po-shipout-overdue-label">Open orders with a container past ETD</span>
                 </div>
             </div>
             <p className="po-shipout-overdue-hint">
-                A container is counted when it has a container number, the ETD date is today or later (not yet passed), and Received is still empty.
+                A container is counted when the PO is Open, it has a container number, the ETD date has already passed (before today), Received is still empty, and User Status is not Arrived or Cancelled.
             </p>
             <button
                 type="button"
@@ -982,6 +983,7 @@ export default function PurchaseOrdersPage() {
     const [etdBeyondFilter, setEtdBeyondFilter] = useState(false);
     const [etdByOrder, setEtdByOrder] = useState({});
     const [receiptByOrder, setReceiptByOrder] = useState({});
+    const [statusByOrder, setStatusByOrder] = useState({});
     const [columnFilters, setColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [debColumnFilters, setDebColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [exporting, setExporting] = useState(false);
@@ -1267,8 +1269,8 @@ export default function PurchaseOrdersPage() {
     );
 
     const etdBeyond = useMemo(
-        () => collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder),
-        [userInputs, etdByOrder, receiptByOrder]
+        () => collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, statusByOrder),
+        [userInputs, etdByOrder, receiptByOrder, statusByOrder]
     );
 
     useEffect(() => {
@@ -1287,14 +1289,17 @@ export default function PurchaseOrdersPage() {
                 if (!active) return;
                 const nextEtd = {};
                 const nextReceipt = {};
+                const nextStatus = {};
                 for (const [nbr, raw] of Object.entries(data.dates || {})) {
                     const etd = toDateKey(raw?.etd);
                     const receipt = toDateKey(raw?.receipt);
                     if (etd) nextEtd[nbr] = etd;
                     if (receipt) nextReceipt[nbr] = receipt;
+                    if (raw?.status) nextStatus[nbr] = String(raw.status);
                 }
                 setEtdByOrder((prev) => ({ ...prev, ...nextEtd }));
                 setReceiptByOrder((prev) => ({ ...prev, ...nextReceipt }));
+                setStatusByOrder((prev) => ({ ...prev, ...nextStatus }));
             } catch (err) {
                 console.error("Failed to load container ETD dates", err);
             }
@@ -1791,7 +1796,7 @@ export default function PurchaseOrdersPage() {
                             <IconInfo /> Module Guide
                         </h4>
                         <p className="po-info-text">
-                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container whose ETD is today or later (not yet passed) and still has no Received date. Click an Order # to open that PO alone in a new tab.
+                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container on an Open PO whose ETD has already passed and still has no Received date. Click an Order # to open that PO alone in a new tab.
                         </p>
                         <p className="po-info-text" style={{ marginTop: '0.75rem' }}>
                             Changes to Ship Out Date, ETA, Container #, Remarks, Origin, and User Status are saved to your account and backed up locally. Use the User Status Guide to review each status and filter the table.
