@@ -294,7 +294,21 @@ export async function requireInventoryUser(request) {
         }
     }
 
-    return { user: userFromPayload(decoded.payload, request, verified) };
+    const user = userFromPayload(decoded.payload, request, verified);
+    const allowed = allowedLoginIds();
+    if (allowed && !allowed.has(String(user.loginId).toUpperCase())) {
+        throw new HttpError(403, "Inventory is not open to your account yet.");
+    }
+    return { user };
+}
+
+/** Temporary pilot list. `KC_INVENTORY_ALLOWED_LOGIN_IDS` overrides it; `*` opens Inventory to everyone. */
+const DEFAULT_ALLOWED_LOGIN_IDS = "KG0751,KG0089";
+
+export function allowedLoginIds(raw = process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS) {
+    const value = String(raw || DEFAULT_ALLOWED_LOGIN_IDS).trim();
+    if (value === "*") return null;
+    return new Set(value.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean));
 }
 
 export function publicUser(ctx) {
