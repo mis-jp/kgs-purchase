@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-import { requireInventoryUser, decodeJwt } from '../app/api/flutter-kelinconnect-inventory/_lib/auth.js';
+import { requireInventoryUser, decodeJwt, allowedLoginIds } from '../app/api/flutter-kelinconnect-inventory/_lib/auth.js';
+
+process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = '*';
 
 const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
 
@@ -36,6 +38,29 @@ test('local HS256: valid token gives the login id and name', async () => {
     const ctx = await requireInventoryUser(req(sign({ loginid: 'KG0543', name: 'Juan Dela Cruz', exp: future() })));
     assert.deepEqual(ctx.user, { loginId: 'KG0543', name: 'Juan Dela Cruz' });
   } finally {
+    delete process.env.KC_JWT_SECRET;
+  }
+});
+
+test('allowed list: defaults to the pilot ids, * opens to everyone', () => {
+  assert.deepEqual([...allowedLoginIds(null)], ['KG0751', 'KG0089']);
+  assert.deepEqual([...allowedLoginIds('')], ['KG0751', 'KG0089']);
+  assert.deepEqual([...allowedLoginIds(' kg1 , KG2 ')], ['KG1', 'KG2']);
+  assert.equal(allowedLoginIds('*'), null);
+});
+
+test('allowed list: other employees get 403', async () => {
+  process.env.KC_JWT_SECRET = 'test-secret';
+  process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = 'KG0751,KG0089';
+  try {
+    const ok = await requireInventoryUser(req(sign({ loginid: 'kg0089', name: 'Joyce', exp: future() })));
+    assert.equal(ok.user.loginId, 'kg0089');
+    await assert.rejects(
+      requireInventoryUser(req(sign({ loginid: 'KG0543', exp: future() }))),
+      (e) => e.status === 403
+    );
+  } finally {
+    process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = '*';
     delete process.env.KC_JWT_SECRET;
   }
 });
