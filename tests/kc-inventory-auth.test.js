@@ -177,8 +177,7 @@ test('remote check: employee id from session-from-ci only when it is the same ac
     if (String(url).includes('/api/auth/session-from-ci')) {
       ciCalls.push(init);
       const cookie = init.headers.Cookie;
-      const id = cookie.includes('mine') ? 'uuid-7' : 'uuid-other';
-      return new Response(JSON.stringify({ user: { id, employee_id: 'kg0751', full_name: 'John Paul' } }), { status: 200 });
+      const id = cookie.includes('mine') ? 'uuid-7' : 'uuid-other';      return new Response(JSON.stringify({ user: { id, employee_id: 'kg0751', full_name: 'John Paul' } }), { status: 200 });
     }
     return new Response(JSON.stringify({ authenticated: true, user: { id: 'uuid-7', email: 'x@y.z' } }), { status: 200 });
   };
@@ -188,11 +187,11 @@ test('remote check: employee id from session-from-ci only when it is the same ac
     assert.equal(ciCalls[0].method, 'POST');
     assert.equal(ciCalls[0].body, '{}');
 
-    const other = await requireInventoryUser(req(sign({ userId: 'uuid-7', exp: future() }, 'kc-secret-8'), { 'x-kc-ci-session': 'theirs0123456789abcdef' }));
+    const other = await requireInventoryUser(req(sign({ userId: 'uuid-8', exp: future() }, 'kc-secret-8'), { 'x-kc-ci-session': 'theirs0123456789abcdef' }));
     assert.equal(other.user.loginId, 'unknown');
 
     const before = ciCalls.length;
-    const junk = await requireInventoryUser(req(sign({ userId: 'uuid-7', exp: future() }, 'kc-secret-9'), { 'x-kc-ci-session': 'bad; cookie=1' }));
+    const junk = await requireInventoryUser(req(sign({ userId: 'uuid-9', exp: future() }, 'kc-secret-9'), { 'x-kc-ci-session': 'bad; cookie=1' }));
     assert.equal(junk.user.loginId, 'unknown');
     assert.equal(ciCalls.length, before, 'malformed session is never sent');
   } finally {
@@ -254,6 +253,47 @@ test('remote check: a token keeps its employee id when a later lookup comes back
   } finally {
     globalThis.fetch = realFetch;
     Date.now = realNow;
+  }
+});
+
+test('remote check: a new token for the same account keeps the employee id when its first lookup comes back empty', async () => {
+  const realFetch = globalThis.fetch;
+  let ciUp = true;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/api/auth/session-from-ci')) {
+      return ciUp
+        ? new Response(JSON.stringify({ user: { id: 'uuid-12', employee_id: 'KG0751', full_name: 'John Paul' } }), { status: 200 })
+        : new Response('{}', { status: 502 });
+    }
+    return new Response(JSON.stringify({ authenticated: true, user: { id: 'uuid-12', email: 'x@y.z' } }), { status: 200 });
+  };
+  try {
+    const ci = { 'x-kc-ci-session': 'mine0123456789abcdef' };
+    assert.equal((await requireInventoryUser(req(sign({ userId: 'uuid-12', exp: future() }, 'kc-secret-12a'), ci))).user.loginId, 'KG0751');
+
+    ciUp = false;
+    assert.equal((await requireInventoryUser(req(sign({ userId: 'uuid-12', exp: future() }, 'kc-secret-12b'), ci))).user.loginId, 'KG0751');
+    assert.equal((await requireInventoryUser(req(sign({ userId: 'uuid-13', exp: future() }, 'kc-secret-13'), ci))).user.loginId, 'unknown');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('allowed list: an employee id that is not found yet gets the no-login-id reply, not "not open"', async () => {
+  const realFetch = globalThis.fetch;
+  process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = 'KG0751,KG0089';
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ authenticated: true, user: { id: 'uuid-14', email: 'x@y.z' } }),
+    { status: 200 }
+  );
+  try {
+    await assert.rejects(
+      requireInventoryUser(req(sign({ userId: 'uuid-14', exp: future() }, 'kc-secret-14'))),
+      (e) => e.status === 403 && /no login id/.test(e.message)
+    );
+  } finally {
+    process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = '*';
+    globalThis.fetch = realFetch;
   }
 });
 

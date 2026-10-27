@@ -35,7 +35,10 @@ function tokenCache() {
     return globalThis[cacheKey];
 }
 
-/** Employee id already matched to a token; a token never changes owner, so lookups that later come back empty reuse it. */
+/**
+ * Employee id already matched to a KelinConnect account (or to the token when it names no account),
+ * so a later lookup that comes back empty, or a fresh token after re-login, reuses it.
+ */
 function knownIds() {
     if (!globalThis[knownKey]) globalThis[knownKey] = new Map();
     return globalThis[knownKey];
@@ -274,16 +277,18 @@ export async function requireInventoryUser(request) {
                 if (fromCi) verified = { loginId: fromCi.loginId, name: fromCi.name || verified?.name || "" };
             }
             const known = knownIds();
+            const accountId = pickClaim(decoded.payload, ["userId", "userid", "sub"]);
+            const knownAt = accountId ? `account:${accountId}` : key;
             if (verified?.loginId) {
                 if (known.size > 2000) known.clear();
-                const until = Number.isFinite(exp) ? exp * 1000 : Date.now() + KNOWN_ID_MAX_MS;
-                known.set(key, { until, loginId: verified.loginId, name: verified.name || "" });
+                const until = accountId || !Number.isFinite(exp) ? Date.now() + KNOWN_ID_MAX_MS : exp * 1000;
+                known.set(knownAt, { until, loginId: verified.loginId, name: verified.name || "" });
             } else {
-                const prior = known.get(key);
+                const prior = known.get(knownAt);
                 if (prior && prior.until >= Date.now()) {
                     verified = { loginId: prior.loginId, name: verified?.name || prior.name };
                 } else if (prior) {
-                    known.delete(key);
+                    known.delete(knownAt);
                 }
             }
             if (cache.size > 2000) cache.clear();
@@ -296,6 +301,10 @@ export async function requireInventoryUser(request) {
 
     const user = userFromPayload(decoded.payload, request, verified);
     const allowed = allowedLoginIds();
+    if (allowed && !(pickClaim(decoded.payload, LOGIN_ID_KEYS) || verified?.loginId || appLoginId(request))) {
+        throw new HttpError(403,
+            "The Inventory server could not match your KelinConnect account to your employee ID (no login id).");
+    }
     if (allowed && !allowed.has(String(user.loginId).toUpperCase())) {
         throw new HttpError(403, "Inventory is not open to your account yet.");
     }
