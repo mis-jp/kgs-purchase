@@ -141,7 +141,7 @@ Rules:
 | `MYSQL_PURCHASE_DATABASE` | `db_purchase` | Read-only source for imports / ERP comparison (already exists) |
 | `MYSQL_INVENTORY_DATABASE` | `db_kelin_inventory` | Read-only source of branch names (already exists) |
 | `KC_INVENTORY_ADMIN_LOGIN_IDS` | `KG0751,KG0543` | Bootstrap admins |
-| `KC_INVENTORY_ALLOWED_LOGIN_IDS` | `*` | Who may open Inventory at all; others get 403. Unset means the temporary pilot list `KG0751,KG0089`; `*` opens it to everyone |
+| `KC_INVENTORY_ALLOWED_LOGIN_IDS` | `*` | Who may open Inventory at all; others get 403. Unset means the temporary pilot list `KG0751,KG0089,KG0452,KG0543,KG0882`; `*` opens it to everyone |
 | `KC_JWT_SECRET` | *(KelinConnect signing secret)* | Optional, fastest token check |
 | `KC_AUTH_VERIFY_URLS` | `/api/auth/session` | Optional override of KelinConnect verify endpoints |
 | `KC_INVENTORY_UPLOAD_DIR` | `/var/kc-inventory-uploads` | Folder for photos / attachments (outside the web root) |
