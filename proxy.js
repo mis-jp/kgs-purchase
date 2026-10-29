@@ -11,6 +11,7 @@ const PUBLIC_PATHS = [
     "/api/auth/session",
     "/api/health",
     "/api/product-directory",
+    "/api/kc-web-inventory",
     "/sitemap.xml",
     "/robots.txt",
 ];
