@@ -22,6 +22,8 @@ import { SALES_LOOKBACK_DAYS, SQL_NET_QTY, SQL_NET_AMOUNT, SQL_GROSS_QTY, netQty
 import { normalizeReplenishmentWindow } from "@/lib/replenishment-window.js";
 import { TARGET_DAYS_OF_COVER } from "@/lib/replenishment-insights.js";
 import { getCached, invalidateCache } from "@/lib/server-cache";
+import { calcOrderWeightKg } from "@/lib/po-metrics.js";
+import { cacheKeys, invalidateFor, runAfterCommit } from "@/lib/cache-invalidation";
 import { FORECAST_ALL_BRANCH, forecastBranchKey, forecastSoldQty, listMonthsInRange, monthInvoiceCoverageComplete, normalizeInvKey } from "@/lib/forecast-generator.js";
 import {
     normalizeErpPoStatus,
@@ -779,6 +781,7 @@ export const MySqlService = {
                     const qty = Number(line.qty) || 0;
                     const receivedQty = Number(line.receivedQty) || 0;
                     linesByOrder.get(key).push({
+                        lineNbr: line.lineNbr ?? null,
                         inventoryId: line.inventoryId,
                         description: line.description,
                         qty,
@@ -792,11 +795,33 @@ export const MySqlService = {
                 }
             }
 
-            const ordersWithLines = rows.map(order => ({
-                ...order,
-                orderType: "Normal",
-                lines: linesByOrder.get(String(order.orderNbr || "").trim()) || [],
-            }));
+            // PO total weight = sum of line piece weight x qty (same rule as Stock Items and the
+            // nested Weight column). One batched item_dimensions lookup per page.
+            let dimsById = {};
+            const lineItemIds = [...new Set(
+                [...linesByOrder.values()].flat().map((l) => String(l.inventoryId || "").trim()).filter(Boolean)
+            )];
+            if (lineItemIds.length) {
+                try {
+                    dimsById = await this.getItemDimensionsBatch(lineItemIds);
+                } catch (dimErr) {
+                    console.error("[MySQL getPurchaseOrders] weight dimensions skipped:", dimErr.message);
+                }
+            }
+            const lookupDim = (id) => {
+                const k = String(id || "").trim();
+                return dimsById[k] || dimsById[k.toUpperCase()] || null;
+            };
+
+            const ordersWithLines = rows.map(order => {
+                const lines = linesByOrder.get(String(order.orderNbr || "").trim()) || [];
+                return {
+                    ...order,
+                    orderType: "Normal",
+                    lines,
+                    totalWeightKg: calcOrderWeightKg(lines, lookupDim),
+                };
+            });
 
             return {
                 orders: ordersWithLines,
@@ -858,9 +883,8 @@ export const MySqlService = {
             });
             await connection.query(sql, [values]);
             await connection.commit();
-            invalidateCache("itemVendorMap");
-            invalidateCache("po:");
-            invalidateCache("openPo:");
+            invalidateFor("purchase-orders.changed");
+            invalidateFor("purchase-order-lines.changed");
         } catch (err) {
             await connection.rollback();
             throw err;
@@ -883,8 +907,8 @@ export const MySqlService = {
         if (!result?.affectedRows) {
             throw Object.assign(new Error("Purchase order not found."), { status: 404 });
         }
-        invalidateCache("po:");
-        invalidateCache("openPo:");
+        // Status drives open-PO qty, so PO lists, Forecast and Replenishment pages refresh too.
+        invalidateFor("purchase-orders.changed");
         return { orderNbr: nbr, status: next };
     },
 
@@ -941,8 +965,7 @@ export const MySqlService = {
         }
 
         if (opened > 0 || closed > 0) {
-            invalidateCache("po:");
-            invalidateCache("openPo:");
+            invalidateFor("purchase-orders.changed");
         }
         return { opened, closed };
     },
@@ -980,8 +1003,7 @@ export const MySqlService = {
         }
 
         if (updated > 0) {
-            invalidateCache("po:");
-            invalidateCache("openPo:");
+            invalidateFor("purchase-orders.changed");
         }
         return { updated };
     },
@@ -1166,8 +1188,7 @@ export const MySqlService = {
                 r.last_sync,
             ]);
             await connection.query(sql, [values]);
-            invalidateCache("itemVendorMap");
-            invalidateCache("openPo:");
+            invalidateFor("purchase-order-lines.changed");
         } finally {
             connection.release();
         }
@@ -1327,8 +1348,7 @@ export const MySqlService = {
             );
             n += Number(completed?.affectedRows) || 0;
             if (n > 0) {
-                invalidateCache("po:");
-                invalidateCache("openPo:");
+                invalidateFor("purchase-orders.changed");
             }
             return n;
         } catch (err) {
@@ -5022,12 +5042,7 @@ export const MySqlService = {
                     await connection.query(sql, [values]);
                 }
                 await connection.commit();
-                invalidateCache("salesIds:");
-                invalidateCache("salesAnalysis:");
-                invalidateCache("replSalesMap:");
-                invalidateCache("salesBranchNames");
-                invalidateCache("resolveSalesBranch:");
-                invalidateCache("salesSummary:");
+                invalidateFor("periodic-sales.changed");
             } catch (err) {
                 await connection.rollback();
                 console.error("[MySQL upsertPeriodicSales Error]", err);
@@ -5110,7 +5125,7 @@ export const MySqlService = {
      * Short TTL — invalidated on upsertAnnotation.
      */
     async getAnnotations(moduleName) {
-        return getCached(`annotations:${moduleName}`, 60_000, () =>
+        return getCached(cacheKeys.annotations(moduleName), 60_000, () =>
             this._getAnnotationsUncached(moduleName)
         );
     },
@@ -5134,6 +5149,26 @@ export const MySqlService = {
     },
 
     /**
+     * Annotations for one order (bare `NBR` or typed `TYPE-NBR` ref ids), via unique_annotation.
+     * Returns the same { [ref_id]: { [field_key]: value } } shape as getAnnotations, uncached.
+     */
+    async getAnnotationsForOrder(moduleName, orderNbr) {
+        const nbr = String(orderNbr || "").trim();
+        if (!nbr) return {};
+        const likeNbr = nbr.replace(/[\\%_]/g, (c) => `\\${c}`);
+        const [rows] = await purchasePool.query(
+            `SELECT ref_id, field_key, field_value FROM user_annotations
+             WHERE module = ? AND (ref_id = ? OR ref_id LIKE ?)`,
+            [moduleName, nbr, `%-${likeNbr}`]
+        );
+        return rows.reduce((acc, row) => {
+            if (!acc[row.ref_id]) acc[row.ref_id] = {};
+            acc[row.ref_id][row.field_key] = row.field_value;
+            return acc;
+        }, {});
+    },
+
+    /**
      * Promised On (ETD) and receipt date for a set of purchase order numbers.
      * Used by the packing-list dashboard; does not filter by status.
      */
@@ -5147,7 +5182,8 @@ export const MySqlService = {
                 const slice = ids.slice(i, i + CHUNK);
                 const placeholders = slice.map(() => "?").join(",");
                 const [rows] = await purchasePool.query(
-                    `SELECT order_nbr AS orderNbr, promised_date AS promisedDate, receipt_date AS receiptDate
+                    `SELECT order_nbr AS orderNbr, promised_date AS promisedDate, receipt_date AS receiptDate,
+                            status
                      FROM purchase_history
                      WHERE order_nbr IN (${placeholders})`,
                     slice
@@ -5157,6 +5193,7 @@ export const MySqlService = {
                     map[row.orderNbr] = {
                         etd: row.promisedDate || null,
                         receipt: row.receiptDate || null,
+                        status: row.status || null,
                     };
                 }
             }
@@ -5172,13 +5209,16 @@ export const MySqlService = {
      */
     async upsertAnnotation(moduleName, refId, fieldKey, fieldValue) {
         try {
-            await purchasePool.query(
-                `INSERT INTO user_annotations (module, ref_id, field_key, field_value)
-                 VALUES (?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE field_value = VALUES(field_value)`,
-                [moduleName, refId, fieldKey, fieldValue]
+            await runAfterCommit(
+                () => purchasePool.query(
+                    `INSERT INTO user_annotations (module, ref_id, field_key, field_value)
+                     VALUES (?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE field_value = VALUES(field_value)`,
+                    [moduleName, refId, fieldKey, fieldValue]
+                ),
+                "annotation.saved",
+                { moduleName }
             );
-            invalidateCache(`annotations:${moduleName}`);
             return true;
         } catch (err) {
             console.error("[MySQL upsertAnnotation Error]", err);
@@ -5259,7 +5299,7 @@ export const MySqlService = {
         return out;
     },
 
-    async upsertItemDimensions(inventoryId, data) {
+    async upsertItemDimensions(inventoryId, data, { skipInvalidate = false } = {}) {
         await this.ensureItemDimensionsTable();
         await pool.execute(
             `INSERT INTO item_dimensions
@@ -5282,7 +5322,7 @@ export const MySqlService = {
                 data.cbm ?? null,
             ]
         );
-        invalidateCache("stock-items-kpi:");
+        if (!skipInvalidate) invalidateFor("item-dimensions.changed");
         return this.getItemDimensions(inventoryId);
     },
 
@@ -5356,13 +5396,15 @@ export const MySqlService = {
             if (fillEmpty) {
                 const existing = await this.getItemDimensions(id);
                 const merged = mergeDimensionsFillEmpty(existing, { ...row, inventory_id: id });
-                await this.upsertItemDimensions(id, merged);
+                await this.upsertItemDimensions(id, merged, { skipInvalidate: true });
             } else {
-                await this.upsertItemDimensions(id, row);
+                await this.upsertItemDimensions(id, row, { skipInvalidate: true });
             }
             imported++;
         }
 
+        // One invalidation for the whole import, after every row is written.
+        if (imported > 0) invalidateFor("item-dimensions.changed");
         return { imported, skipped, skippedIds };
     },
 
@@ -7202,8 +7244,7 @@ export const MySqlService = {
 
             if (!recommendations.length) {
                 await connection.commit();
-                invalidateCache(`replenishment:full:${companyId}:${branchId}`);
-                invalidateCache(`replenishment:page:${companyId}:${branchId}`);
+                invalidateFor("replenishment.branch-rebuilt", { companyId, branchKey: branchId });
                 return 0;
             }
 
@@ -7225,8 +7266,7 @@ export const MySqlService = {
                 await connection.query(sql, [values.slice(i, i + CHUNK)]);
             }
             await connection.commit();
-            invalidateCache(`replenishment:full:${companyId}:${branchId}`);
-            invalidateCache(`replenishment:page:${companyId}:${branchId}`);
+            invalidateFor("replenishment.branch-rebuilt", { companyId, branchKey: branchId });
             return values.length;
         } catch (err) {
             await connection.rollback();
@@ -7402,7 +7442,7 @@ export const MySqlService = {
             const removed = result?.affectedRows || 0;
             if (removed > 0) {
                 console.log(`[Forecast stock] purged ${removed} DAMAGE/DISCOUNTED rows`);
-                invalidateCache("forecastGen:");
+                invalidateFor("forecast-stock.changed");
             }
             return removed;
         } catch (err) {
@@ -7461,7 +7501,7 @@ export const MySqlService = {
                 );
                 written += chunk.length;
             }
-            invalidateCache("forecastGen:");
+            invalidateFor("forecast-stock.changed");
             return written;
         } catch (err) {
             console.warn("[MySQL upsertForecastItemStockRows]", err.message);
@@ -7484,19 +7524,22 @@ export const MySqlService = {
         const company = String(companyId || "main").trim() || "main";
         const branch = forecastBranchKey(branchId);
         try {
-            await purchasePool.query(
-                `INSERT INTO forecast_generator_inputs
-                    (company_id, branch_id, inventory_id, estimate_sales, buffer_inventory, target_sales, updated_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                 ON DUPLICATE KEY UPDATE
-                    estimate_sales = VALUES(estimate_sales),
-                    buffer_inventory = VALUES(buffer_inventory),
-                    target_sales = VALUES(target_sales),
-                    updated_by = VALUES(updated_by),
-                    updated_at = CURRENT_TIMESTAMP`,
-                [company, branch, id, estimateSales, bufferInventory, targetSales, updatedBy]
+            await runAfterCommit(
+                () => purchasePool.query(
+                    `INSERT INTO forecast_generator_inputs
+                        (company_id, branch_id, inventory_id, estimate_sales, buffer_inventory, target_sales, updated_by)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                     ON DUPLICATE KEY UPDATE
+                        estimate_sales = VALUES(estimate_sales),
+                        buffer_inventory = VALUES(buffer_inventory),
+                        target_sales = VALUES(target_sales),
+                        updated_by = VALUES(updated_by),
+                        updated_at = CURRENT_TIMESTAMP`,
+                    [company, branch, id, estimateSales, bufferInventory, targetSales, updatedBy]
+                ),
+                "forecast-input.saved",
+                { companyId: company, branchKey: branch }
             );
-            invalidateCache(`forecastGen:${company}:${branch}`);
             return true;
         } catch (err) {
             console.error("[MySQL upsertForecastGeneratorInput]", err.message);

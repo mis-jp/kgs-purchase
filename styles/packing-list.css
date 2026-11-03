@@ -1,0 +1,312 @@
+/* Purchase Orders view tabs + Packing List Generator */
+
+.po-view-tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.po-view-tab {
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 0.6rem 1rem;
+    font: inherit;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.po-view-tab:hover {
+    color: var(--text-primary);
+}
+
+.po-view-tab.is-active {
+    color: var(--accent-primary);
+    border-bottom-color: var(--accent-primary);
+}
+
+.po-view-tab:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+}
+
+/* Keeps the existing PO content laid out exactly as direct children of .po-main */
+.po-orders-view {
+    display: contents;
+}
+
+.po-orders-view[hidden] {
+    display: none;
+}
+
+.pl-root {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.pl-toolbar {
+    flex-wrap: wrap;
+}
+
+.pl-date {
+    width: 150px;
+}
+
+.pl-layout {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+.pl-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    padding: 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.pl-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.pl-panel-title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.pl-muted {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.pl-search {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.pl-pick-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+}
+
+.pl-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.pl-link-btn {
+    appearance: none;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 0.82rem;
+    color: var(--accent-primary);
+    cursor: pointer;
+}
+
+.pl-link-btn:hover {
+    text-decoration: underline;
+}
+
+.pl-pick-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 62vh;
+    overflow-y: auto;
+    padding-right: 0.15rem;
+}
+
+.pl-pick-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 0.82rem;
+}
+
+.pl-pick-row:hover {
+    border-color: var(--border-medium);
+}
+
+.pl-pick-row.is-checked {
+    border-color: var(--accent-primary);
+    background: var(--accent-soft);
+}
+
+.pl-pick-main,
+.pl-pick-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.pl-pick-meta {
+    align-items: flex-end;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+.pl-pick-nbr {
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.pl-pick-vendor {
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pl-load-more {
+    align-self: center;
+    margin-top: 0.25rem;
+}
+
+.pl-sheet-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.pl-table-wrap {
+    max-height: 62vh;
+    overflow: auto;
+}
+
+.pl-table th,
+.pl-table td {
+    font-size: 0.82rem;
+}
+
+.pl-num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.pl-nowrap {
+    white-space: nowrap;
+}
+
+.pl-desc {
+    min-width: 220px;
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pl-tag {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0 0.4rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--status-warning);
+    color: var(--status-warning);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.pl-qty-input {
+    width: 90px;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: right;
+}
+
+.pl-qty-input:focus {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 0;
+}
+
+.pl-row-over td {
+    background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+}
+
+.pl-row-over .pl-qty-input {
+    border-color: var(--status-warning);
+}
+
+.pl-total-row td {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-elevated);
+    font-weight: 700;
+    border-top: 2px solid var(--border-medium);
+}
+
+.pl-note {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.pl-empty {
+    padding: 1.5rem 0.75rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.pl-empty-wide {
+    background: var(--bg-surface);
+    border: 1px dashed var(--border-medium);
+    border-radius: var(--radius-lg);
+}
+
+.pl-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--status-danger);
+}
+
+@media (max-width: 960px) {
+    .pl-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .pl-pick-scroll,
+    .pl-table-wrap {
+        max-height: none;
+    }
+}

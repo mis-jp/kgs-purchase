@@ -12,6 +12,7 @@ const PUBLIC_PATHS = [
     "/api/health",
     "/api/product-directory",
     "/api/kc-web-inventory",
+    "/api/flutter-kelinconnect-inventory",
     "/sitemap.xml",
     "/robots.txt",
 ];

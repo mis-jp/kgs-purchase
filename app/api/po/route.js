@@ -139,7 +139,7 @@ export async function GET(request) {
             try {
                 // Background only — never block the PO list behind Acumatica align
                 // or heavy MySQL repairs (those were causing nginx HTTP 504s).
-                kickCached("po:align-open-status-v5-hold", 10 * 60_000, async () => {
+                kickCached("job:po-align-open-status-v5-hold", 10 * 60_000, async () => {
                     const cred = poCred && poCred !== "__bypass__"
                         ? poCred
                         : await getSystemAcumaticaCredential();
@@ -150,7 +150,7 @@ export async function GET(request) {
                     });
                 });
 
-                kickCached("po:repair-data-v2", 15 * 60_000, async () => {
+                kickCached("job:po-repair-data-v2", 15 * 60_000, async () => {
                     const aliases = await MySqlService.normalizePurchaseOrderStatusAliases();
                     const vendors = await MySqlService.backfillPurchaseHistoryVendorNames();
                     const amounts = await MySqlService.repairPurchaseOrderAmounts();
@@ -169,7 +169,7 @@ export async function GET(request) {
                     );
                 }
                 if (vendorCred) {
-                    kickCached("po:fill-vendor-names-v4", 10 * 60_000, () =>
+                    kickCached("job:po-fill-vendor-names-v4", 10 * 60_000, () =>
                         ensurePurchaseVendorNames({ cookie: vendorCred })
                     );
                 }
@@ -185,7 +185,7 @@ export async function GET(request) {
                         ...result,
                         orders: await enrichVendorNames(result.orders),
                     };
-                    kickCached("po:repair-vendors-once", 15 * 60_000, async () =>
+                    kickCached("job:po-repair-vendors-once", 15 * 60_000, async () =>
                         MySqlService.backfillPurchaseHistoryVendorNames()
                     );
                 }

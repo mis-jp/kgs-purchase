@@ -1195,6 +1195,8 @@ export const AcumaticaService = {
                         await emit(rows);
                         allRows.push(...rows);
                     } catch (winErr) {
+                        // The caller signs in again and retries; later windows would fail the same way.
+                        if (/^Unauthorized$/i.test(String(winErr?.message || "").trim())) throw winErr;
                         console.error(
                             `>>> [SalesSync] Window ${w.start}..${w.end} failed:`,
                             winErr?.message || winErr
@@ -1580,6 +1582,8 @@ export const AcumaticaService = {
                 }
                 console.log(`[Acumatica] PO status "${status}": ${count} order(s).`);
             } catch (err) {
+                // Every remaining status would fail too; the caller retries with a fresh login.
+                if (/^Unauthorized$/i.test(String(err?.message || "").trim())) throw err;
                 console.warn(`[Acumatica] PO status "${status}" fetch skipped:`, err?.message || err);
             }
         }

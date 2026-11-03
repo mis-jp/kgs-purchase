@@ -117,7 +117,10 @@ export const ProductDirectoryService = {
         requireAdmin(request);
         await ensureTables();
         const limit = Number(body.limit);
-        return listActionLogs(Number.isFinite(limit) ? limit : undefined);
+        return listActionLogs(Number.isFinite(limit) ? limit : undefined, {
+            actions: body.actions,
+            excludeActions: body.exclude_actions,
+        });
     },
 };
 

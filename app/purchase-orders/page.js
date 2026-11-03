@@ -4,13 +4,18 @@ import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from "rea
 import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
-import { calcTotalCbm, formatCbm } from "@/lib/item-dimensions";
+import Link from "next/link";
+import { isEtdBeyondContainer, isEtdBeyondOrderStatus, poDetailHref } from "@/lib/po-metrics";
+import { formatWeightKg } from "@/lib/item-dimensions";
+import PoLinesTable from "@/components/PoLinesTable";
+import PackingListGenerator from "@/components/packing-list/PackingListGenerator";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
 import "@/styles/inventory-detail.css";
+import "@/styles/packing-list.css";
 
 const PAGE_SIZE = 10;
 
@@ -81,6 +86,13 @@ function poStatusClass(status) {
     if (s === "completed") return "po-status-completed";
     if (s === "cancelled" || s === "canceled") return "po-status-cancelled";
     return "po-status-default";
+}
+
+/** PO total weight label ("1,234.5 kg"); empty when no line has KG. */
+function poWeightLabel(po) {
+    const kg = po?.totalWeightKg;
+    if (kg == null || !Number.isFinite(Number(kg))) return "";
+    return `${formatWeightKg(kg)} kg`;
 }
 
 function fmt(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -306,10 +318,10 @@ function collectOverdueShipOuts(userInputs, asOf = todayIso()) {
 }
 
 /**
- * Packing list: a container slot whose ETD (Promised On) is already past
+ * Packing list: a container slot whose ETD (Promised On) is today or later (not yet passed)
  * and that slot still has no Received date.
  */
-function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf = todayIso()) {
+function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, statusByOrder, asOf = todayIso()) {
     const today = toDateKey(asOf) || todayIso();
     const seen = new Set();
     const orderNbrs = [];
@@ -318,10 +330,11 @@ function collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, asOf
         const nbr = orderNbrFromAnnotationRef(refId) || poAnnotationKey(refId);
         if (!nbr || seen.has(nbr)) continue;
         seen.add(nbr);
+        if (!isEtdBeyondOrderStatus(statusByOrder?.[nbr])) continue;
         const ui = getPoUserInputs(userInputs, nbr);
         const logistics = getLogisticsEntries(ui, receiptByOrder?.[nbr]);
         const etd = toDateKey(etdByOrder?.[nbr] || ui?.etd);
-        if (!etd || etd >= today) continue;
+        if (!etd || !isEtdBeyondContainer(etd, today)) continue;
         let hit = false;
         for (let i = 0; i < logistics.containerNumber.length; i++) {
             if (!isOpenArrivalUserStatus(logistics.userStatus[i])) continue;
@@ -460,6 +473,7 @@ const EMPTY_COLUMN_FILTERS = {
     receivedDate: "",
     remarks: "",
     userStatus: "",
+    totalWeight: "",
     totalAmount: "",
 };
 
@@ -478,6 +492,7 @@ const COLUMN_FILTER_META = [
     { key: "receivedDate", label: "Received" },
     { key: "remarks", label: "Remarks" },
     { key: "userStatus", label: "User Status" },
+    { key: "totalWeight", label: "Weight" },
     { key: "totalAmount", label: "Amount" },
 ];
 
@@ -527,6 +542,8 @@ function poRowMatchesFilters(o, {
     if (f.userStatus && !userStatusList(ui.userStatus).includes(f.userStatus)) return false;
     if (overdueShipOutFilter && !overdueNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
     if (etdBeyondFilter && !etdNbrs.includes(poAnnotationKey(o.orderNbr))) return false;
+    if (f.totalWeight && !textIncludes(poWeightLabel(o), f.totalWeight)
+        && !textIncludes(String(o.totalWeightKg ?? ""), f.totalWeight)) return false;
     if (f.totalAmount && !textIncludes(String(o.totalAmount ?? ""), f.totalAmount)
         && !textIncludes(fmt(o.totalAmount), f.totalAmount)) return false;
     return true;
@@ -914,21 +931,21 @@ function EtdBeyondContainerPanel({ containerCount, orderCount, filtering, onTogg
                 </div>
                 <div>
                     <h2 id="po-etd-beyond-title">ETD Beyond the Container</h2>
-                    <p>Packing list containers past their ETD.</p>
+                    <p>Packing list containers whose ETD has passed but are not received yet.</p>
                 </div>
             </div>
             <div className="po-shipout-overdue-stats">
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{containerCount}</span>
-                    <span className="po-shipout-overdue-label">Containers past ETD</span>
+                    <span className="po-shipout-overdue-label">Containers past ETD, not received</span>
                 </div>
                 <div className="po-shipout-overdue-stat">
                     <span className="po-shipout-overdue-value">{orderCount}</span>
-                    <span className="po-shipout-overdue-label">Orders with a container past ETD</span>
+                    <span className="po-shipout-overdue-label">Open orders with a container past ETD</span>
                 </div>
             </div>
             <p className="po-shipout-overdue-hint">
-                A container is counted when it has a container number, the ETD date is already past, and Received is still empty.
+                A container is counted when the PO is Open, it has a container number, the ETD date has already passed (before today), Received is still empty, and User Status is not Arrived or Cancelled.
             </p>
             <button
                 type="button"
@@ -968,9 +985,19 @@ export default function PurchaseOrdersPage() {
     const [etdBeyondFilter, setEtdBeyondFilter] = useState(false);
     const [etdByOrder, setEtdByOrder] = useState({});
     const [receiptByOrder, setReceiptByOrder] = useState({});
+    const [statusByOrder, setStatusByOrder] = useState({});
     const [columnFilters, setColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [debColumnFilters, setDebColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [exporting, setExporting] = useState(false);
+    const [view, setView] = useState("orders");
+
+    const changeView = useCallback((next) => {
+        setView(next);
+        const url = new URL(window.location.href);
+        if (next === "packing") url.searchParams.set("view", "packing");
+        else url.searchParams.delete("view");
+        window.history.replaceState(window.history.state, "", url);
+    }, []);
 
     const setColumnFilter = useCallback((field, value) => {
         const next = value || "";
@@ -1016,6 +1043,7 @@ export default function PurchaseOrdersPage() {
         const yearStart = yearStartIso();
 
         Promise.resolve().then(async () => {
+            if (new URLSearchParams(window.location.search).get("view") === "packing") setView("packing");
             // 1. Load filters — From defaults to Jan 1 of current year; To = today
             if (savedPage) setPage(parseInt(savedPage));
             if (savedSearch) setSearch(savedSearch);
@@ -1233,6 +1261,7 @@ export default function PurchaseOrdersPage() {
         debColumnFilters.eta,
         debColumnFilters.receivedDate,
         debColumnFilters.remarks,
+        debColumnFilters.totalWeight,
         debColumnFilters.totalAmount,
     ]);
 
@@ -1252,8 +1281,8 @@ export default function PurchaseOrdersPage() {
     );
 
     const etdBeyond = useMemo(
-        () => collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder),
-        [userInputs, etdByOrder, receiptByOrder]
+        () => collectEtdBeyondContainers(userInputs, etdByOrder, receiptByOrder, statusByOrder),
+        [userInputs, etdByOrder, receiptByOrder, statusByOrder]
     );
 
     useEffect(() => {
@@ -1272,14 +1301,17 @@ export default function PurchaseOrdersPage() {
                 if (!active) return;
                 const nextEtd = {};
                 const nextReceipt = {};
+                const nextStatus = {};
                 for (const [nbr, raw] of Object.entries(data.dates || {})) {
                     const etd = toDateKey(raw?.etd);
                     const receipt = toDateKey(raw?.receipt);
                     if (etd) nextEtd[nbr] = etd;
                     if (receipt) nextReceipt[nbr] = receipt;
+                    if (raw?.status) nextStatus[nbr] = String(raw.status);
                 }
                 setEtdByOrder((prev) => ({ ...prev, ...nextEtd }));
                 setReceiptByOrder((prev) => ({ ...prev, ...nextReceipt }));
+                setStatusByOrder((prev) => ({ ...prev, ...nextStatus }));
             } catch (err) {
                 console.error("Failed to load container ETD dates", err);
             }
@@ -1329,6 +1361,7 @@ export default function PurchaseOrdersPage() {
                 || col.eta
                 || col.receivedDate
                 || col.remarks
+                || col.totalWeight
                 || col.totalAmount
             );
             const pageSize = hasClientOnlyColumnFilters ? 100 : PAGE_SIZE;
@@ -1636,7 +1669,7 @@ export default function PurchaseOrdersPage() {
             }));
 
             const lines = [
-                "Order Nbr,Vendor ID,Vendor Name,Status,PO Date,ETD,Received Date,Total Amount",
+                "Order Nbr,Vendor ID,Vendor Name,Status,PO Date,ETD,Received Date,Total Weight (kg),Total Amount",
                 ...rows.map((po) => [
                     csvCell(po.orderNbr),
                     csvCell(po.vendorId),
@@ -1645,6 +1678,7 @@ export default function PurchaseOrdersPage() {
                     csvDate(po.date),
                     csvDate(po.promisedDate),
                     csvDate(po.receiptDate),
+                    po.totalWeightKg == null ? "" : Number(Number(po.totalWeightKg).toFixed(2)),
                     po.totalAmount ?? "",
                 ].join(",")),
             ];
@@ -1699,6 +1733,7 @@ export default function PurchaseOrdersPage() {
             || f.eta
             || f.receivedDate
             || f.remarks
+            || f.totalWeight
             || f.totalAmount
         );
     }, [columnFilters]);
@@ -1717,26 +1752,60 @@ export default function PurchaseOrdersPage() {
                         <h1>Purchase Orders</h1>
                         <p>View and manage all purchase orders live from Acumatica ERP.</p>
                     </div>
-                    <EtdBeyondContainerPanel
-                        containerCount={etdBeyond.containerCount}
-                        orderCount={etdBeyond.orderNbrs.length}
-                        filtering={etdBeyondFilter}
-                        onToggleFilter={() => setEtdBeyondFilter((v) => !v)}
-                    />
-                    <ShipOutOverduePanel
-                        shipmentCount={overdueShipOut.shipmentCount}
-                        orderCount={overdueShipOut.orderNbrs.length}
-                        filtering={overdueShipOutFilter}
-                        onToggleFilter={() => setOverdueShipOutFilter((v) => !v)}
-                    />
-                    <UserStatusGuidePanel
-                        activeTab={statusGuideTab}
-                        onTabChange={setStatusGuideTab}
-                        onFilterTable={handleUserStatusTableFilter}
-                        tableFilter={userStatusTableFilter}
-                    />
+                    {view === "orders" && (
+                        <>
+                            <EtdBeyondContainerPanel
+                                containerCount={etdBeyond.containerCount}
+                                orderCount={etdBeyond.orderNbrs.length}
+                                filtering={etdBeyondFilter}
+                                onToggleFilter={() => setEtdBeyondFilter((v) => !v)}
+                            />
+                            <ShipOutOverduePanel
+                                shipmentCount={overdueShipOut.shipmentCount}
+                                orderCount={overdueShipOut.orderNbrs.length}
+                                filtering={overdueShipOutFilter}
+                                onToggleFilter={() => setOverdueShipOutFilter((v) => !v)}
+                            />
+                            <UserStatusGuidePanel
+                                activeTab={statusGuideTab}
+                                onTabChange={setStatusGuideTab}
+                                onFilterTable={handleUserStatusTableFilter}
+                                tableFilter={userStatusTableFilter}
+                            />
+                        </>
+                    )}
                 </div>
 
+                <div className="po-view-tabs" role="tablist" aria-label="Purchase Orders views">
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={view === "orders"}
+                        className={`po-view-tab ${view === "orders" ? "is-active" : ""}`}
+                        onClick={() => changeView("orders")}
+                    >
+                        Purchase Orders
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={view === "packing"}
+                        className={`po-view-tab ${view === "packing" ? "is-active" : ""}`}
+                        onClick={() => changeView("packing")}
+                    >
+                        Packing List Generator
+                    </button>
+                </div>
+
+                {view === "packing" && (
+                    <PackingListGenerator
+                        branchOptions={branchOptions}
+                        allowAllBranches={allowAllBranches}
+                        defaultBranch={selectedBranch}
+                    />
+                )}
+
+                <div className="po-orders-view" hidden={view !== "orders"}>
                 <aside className="po-summary-strip" aria-label="Purchase order summary" data-tour="kpi-cards">
                     <div className="po-summary-card">
                         <h3 className="po-summary-title">
@@ -1773,7 +1842,7 @@ export default function PurchaseOrdersPage() {
                             <IconInfo /> Module Guide
                         </h4>
                         <p className="po-info-text">
-                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container whose ETD has passed and still has no Received date.
+                            PO Date, ETD (Promised On), and Received Date come from Acumatica / Purchase Receipts. Update Ship Out Date and ETA here for logistics tracking. ETD Beyond the Container is the packing list view: each container on an Open PO whose ETD has already passed and still has no Received date. Click an Order # to open that PO alone in a new tab.
                         </p>
                         <p className="po-info-text" style={{ marginTop: '0.75rem' }}>
                             Changes to Ship Out Date, ETA, Container #, Remarks, Origin, and User Status are saved to your account and backed up locally. Use the User Status Guide to review each status and filter the table.
@@ -1922,6 +1991,7 @@ export default function PurchaseOrdersPage() {
                                 <PoColHeader label="Received" className="po-col-received" />
                                 <PoColHeader label="Remarks" className="po-col-remarks" />
                                 <PoColHeader label="User Status" className="po-col-user-status" />
+                                <PoColHeader label="Weight" className="po-col-weight" />
                                 <PoColHeader label="Amount" className="po-col-amount" />
                             </tr>
                             <tr className="po-head-filters">
@@ -2028,6 +2098,13 @@ export default function PurchaseOrdersPage() {
                                     onChange={(v) => setColumnFilter("userStatus", v)}
                                 />
                                 <ColumnFilterCell
+                                    filterKey="totalWeight"
+                                    className="po-col-weight"
+                                    value={columnFilters.totalWeight}
+                                    onChange={(v) => setColumnFilter("totalWeight", v)}
+                                    placeholder="Weight"
+                                />
+                                <ColumnFilterCell
                                     filterKey="totalAmount"
                                     className="po-col-amount"
                                     value={columnFilters.totalAmount}
@@ -2038,14 +2115,14 @@ export default function PurchaseOrdersPage() {
                         </thead>
                         <tbody>
                             {loading && orders.length === 0 ? (
-                                <tr><td colSpan={16} className="si-loading-cell">
+                                <tr><td colSpan={17} className="si-loading-cell">
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '4rem 0' }}>
                                         <div className="db-spinner db-spinner-lg"></div>
                                         <span style={{ fontWeight: '600', color: 'var(--text-secondary)' }}>Fetching orders...</span>
                                     </div>
                                 </td></tr>
                             ) : displayedOrders.length === 0 ? (
-                                <tr><td colSpan={16} className="si-empty-cell" style={{ padding: '4rem 0' }}>
+                                <tr><td colSpan={17} className="si-empty-cell" style={{ padding: '4rem 0' }}>
                                     {etdBeyondFilter && overdueShipOutFilter
                                         ? "No purchase orders match both dashboards."
                                         : etdBeyondFilter
@@ -2068,11 +2145,18 @@ export default function PurchaseOrdersPage() {
                                 const onLogisticsRemove = (i) => handleLogisticsRemove(key, i, po.receiptDate);
                                 return (
                                     <Fragment key={key}>
-                                        <tr className={`db-clickable-row ${isOpen ? "po-row-expanded" : ""}`} onClick={() => toggleExpand(key)}>
+                                        <tr className={isOpen ? "po-row-expanded" : undefined}>
                                             <td>
-                                                <span className={`po-expand-icon ${isOpen ? "po-expand-open" : ""}`}>
+                                                <button
+                                                    type="button"
+                                                    className={`po-expand-icon po-expand-btn ${isOpen ? "po-expand-open" : ""}`}
+                                                    onClick={() => toggleExpand(key)}
+                                                    aria-expanded={isOpen}
+                                                    aria-label={isOpen ? `Hide items for ${po.orderNbr}` : `Show items for ${po.orderNbr}`}
+                                                    title={isOpen ? "Hide items" : "Show items"}
+                                                >
                                                     <IconChevronDown />
-                                                </span>
+                                                </button>
                                             </td>
                                             <td className="po-col-branch">
                                                 <span className="po-branch-cell" title={orderBranchLabel(po) || ""}>
@@ -2175,6 +2259,9 @@ export default function PurchaseOrdersPage() {
                                                     ))}
                                                 </div>
                                             </td>
+                                            <td className="po-col-weight po-weight-td" title={po.totalWeightKg == null ? "No line has KG set" : "Sum of line piece weight (box KG / PCS/BOX) \u00d7 quantity"}>
+                                                {poWeightLabel(po) || "\u2014"}
+                                            </td>
                                             <td className="po-amount-td" onClick={(e) => e.stopPropagation()}>
                                                 <div className="po-amount-stack">
                                                     {orderHasNoAcumaticaCost(po) ? (
@@ -2194,55 +2281,23 @@ export default function PurchaseOrdersPage() {
                                         </tr>
                                         {isOpen && (
                                             <tr className="po-lines-row">
-                                                <td colSpan={16}>
-                                                    <div className="po-lines-wrap">
-                                                        <table className="po-lines-table">
-                                                            <thead>
-                                                                <tr>
-                                                                    <th style={{ width: 180 }}>Item ID</th>
-                                                                    <th>Description</th>
-                                                                    <th style={{ textAlign: 'right', width: 120 }}>Quantity</th>
-                                                                    <th style={{ textAlign: 'right', width: 110 }}>Total CBM</th>
-                                                                    <th style={{ textAlign: 'right', width: 150 }}>Ext. Cost</th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody>
-                                                                {po.lines && po.lines.length > 0 ? po.lines.map((line, i) => {
-                                                                    const dim = lookupLineDim(line.inventoryId);
-                                                                    const totalCbm = calcTotalCbm({
-                                                                        length_m: dim?.length_m,
-                                                                        height_m: dim?.height_m,
-                                                                        width_m: dim?.width_m,
-                                                                        cbm: dim?.cbm,
-                                                                        pcs_per_box: dim?.pcs_per_box,
-                                                                        qty: line.qty,
-                                                                    });
-                                                                    return (
-                                                                    <tr key={i}>
-                                                                        <td>
-                                                                            <span 
-                                                                                className="db-inv-id si-clickable-id"
-                                                                                onClick={(e) => { e.stopPropagation(); setSelectedId(line.inventoryId); }}
-                                                                            >
-                                                                                {line.inventoryId}
-                                                                            </span>
-                                                                        </td>
-                                                                        <td style={{ color: 'var(--text-secondary)', fontWeight: '500' }}>{line.description}</td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)' }}>
-                                                                            {Number(line.qty).toLocaleString()} <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{line.uom}</span>
-                                                                        </td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }} title={dim ? "From L×H×W and PCS/BOX" : "Set packaging dimensions on the item"}>
-                                                                            {formatCbm(totalCbm, 4)}
-                                                                        </td>
-                                                                        <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--accent-primary)' }}>₱{fmt(line.extCost)}</td>
-                                                                    </tr>
-                                                                    );
-                                                                }) : (
-                                                                    <tr><td colSpan={5} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>No line items found for this order.</td></tr>
-                                                                )}
-                                                            </tbody>
-                                                        </table>
+                                                <td colSpan={17}>
+                                                    <div className="po-lines-toolbar">
+                                                        <span className="po-lines-toolbar-title">Items on {po.orderNbr}</span>
+                                                        <Link
+                                                            className="po-open-whole-btn"
+                                                            href={poDetailHref(po.orderNbr)}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            title={`Open ${po.orderNbr} in a new tab`}
+                                                        >
+                                                            Open whole PO
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                                                <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                                            </svg>
+                                                        </Link>
                                                     </div>
+                                                    <PoLinesTable lines={po.lines} lookupDim={lookupLineDim} onItemClick={setSelectedId} orderNbr={po.orderNbr} />
                                                 </td>
                                             </tr>
                                         )}
@@ -2264,6 +2319,7 @@ export default function PurchaseOrdersPage() {
                         disabled={loading || hasClientOnlyColumnFilters}
                     />
                 )}
+                </div>
             </main>
 
             {selectedId && (

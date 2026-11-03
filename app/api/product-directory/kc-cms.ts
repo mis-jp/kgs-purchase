@@ -324,17 +324,18 @@ async function loadCmsMediaRows(
       `SELECT ${selectCols}
        FROM product_inventory_items p
        INNER JOIN kc_products kp
-         ON BINARY kp.id = BINARY p.inventory_id AND kp.is_active = 1
+         ON p.inventory_id = kp.id COLLATE utf8mb4_unicode_ci
+        AND BINARY kp.id = BINARY p.inventory_id AND kp.is_active = 1
        INNER JOIN kc_folders f
-         ON BINARY f.id = BINARY kp.folder_id AND f.is_active = 1
-        AND BINARY f.item_class_id = BINARY ?
+         ON f.id = kp.folder_id AND BINARY f.id = BINARY kp.folder_id AND f.is_active = 1
+        AND f.item_class_id = ? AND BINARY f.item_class_id = BINARY ?
        LEFT JOIN inventory_models m ON m.id = p.model_id
        WHERE p.deleted_at IS NULL
          AND LOWER(TRIM(p.item_status)) = 'active'
          ${urlClause}
          ${modelClause}
        ${orderBy}`,
-      [itemClassId, ...modelParam],
+      [itemClassId, itemClassId, ...modelParam],
     );
     if (rows.length > 0) return mapRows(rows);
   } catch (err) {
@@ -519,9 +520,9 @@ async function cmsMediaUrlForProduct(productId: string): Promise<string> {
     const [rows] = await getPool().query<RowDataPacket[]>(
       `SELECT image_url, brochure_url, youtube_url
        FROM product_inventory_items
-       WHERE deleted_at IS NULL AND BINARY inventory_id = BINARY ?
+       WHERE deleted_at IS NULL AND inventory_id = ? AND BINARY inventory_id = BINARY ?
        LIMIT 1`,
-      [productId],
+      [productId, productId],
     );
     const row = rows[0];
     if (!row) return "";
@@ -1659,9 +1660,9 @@ export async function getProductMedia(
       `SELECT id, inventory_id, inventory_name, image_url, brochure_url, youtube_url,
               kc_category, kc_item_class
        FROM product_inventory_items
-       WHERE deleted_at IS NULL AND BINARY inventory_id = BINARY ?
+       WHERE deleted_at IS NULL AND inventory_id = ? AND BINARY inventory_id = BINARY ?
        LIMIT 1`,
-      [lookup],
+      [lookup, lookup],
     );
     rows = bySku;
   }
@@ -1865,7 +1866,16 @@ const ALLOWED_ACTIONS = new Set([
   "searched",
   "downloaded",
   "reordered_media",
+  "added_folder",
+  "added_product",
+  "deleted_folder",
+  "deleted_product",
 ]);
+
+function actionList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((v) => String(v ?? "").trim()).filter(Boolean))].slice(0, 20);
+}
 
 export async function writeActionLog(body: Record<string, unknown>) {
   await ensureTables();
@@ -1889,13 +1899,33 @@ export async function writeActionLog(body: Record<string, unknown>) {
   return { id: logId, ok: true };
 }
 
-export async function listActionLogs(limit = 200) {
+/**
+ * Newest logs first. `actions` keeps only those action types; `excludeActions` drops them
+ * (the app uses it for its "Others" filter).
+ */
+export async function listActionLogs(
+  limit = 200,
+  filter: { actions?: unknown; excludeActions?: unknown } = {},
+) {
   await ensureTables();
   const lim = Math.max(1, Math.min(Number(limit) || 200, 500));
+  const actions = actionList(filter.actions);
+  const excluded = actionList(filter.excludeActions);
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (actions.length) {
+    clauses.push(`action IN (${actions.map(() => "?").join(",")})`);
+    params.push(...actions);
+  }
+  if (excluded.length) {
+    clauses.push(`action NOT IN (${excluded.map(() => "?").join(",")})`);
+    params.push(...excluded);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const [rows] = await getPool().query<RowDataPacket[]>(
     `SELECT id, action, actor_id, actor_name, target_id, target_name, detail, created_at
-     FROM inventory_action_logs ORDER BY created_at DESC LIMIT ?`,
-    [lim],
+     FROM inventory_action_logs ${where} ORDER BY created_at DESC LIMIT ?`,
+    [...params, lim],
   );
   return {
     logs: rows.map((r) => ({
