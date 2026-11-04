@@ -6,12 +6,32 @@ import {
     invoicesToPeriodicSalesRows,
 } from "@/lib/acumatica-sales-aggregate";
 import { isExcludedBranchAlias, isExcludedLocationAlias } from "@/lib/companies";
+import { busyRetryDelayMs, isAcumaticaUnauthorized } from "@/lib/acumatica-retry";
 const ACU_BASE = `${process.env.ACUMATICA_BASE_URL}/entity/Default/20.200.001`;
 
 // Bypasses 'CERT_HAS_EXPIRED' error for Acumatica connections
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const toISODate = (date) => date.toISOString().split("T")[0];
+
+/** After a 429 every caller in this process pauses until Acumatica's cool-down ends. */
+let acumaticaBusyUntil = 0;
+
+function markAcumaticaBusy(delayMs) {
+    acumaticaBusyUntil = Math.max(acumaticaBusyUntil, Date.now() + delayMs);
+}
+
+function waitWhileAcumaticaBusy(signal) {
+    const wait = acumaticaBusyUntil - Date.now();
+    if (wait <= 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, wait);
+        signal?.addEventListener?.("abort", () => {
+            clearTimeout(timer);
+            reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+        }, { once: true });
+    });
+}
 
 /** --- DATA EXTRACTION HELPERS --- */
 const getF = (obj, keyName) => {
@@ -471,6 +491,7 @@ export const AcumaticaService = {
         let lastError = null;
         for (let attempts = 1; attempts <= maxAttempts; attempts++) {
             try {
+                await waitWhileAcumaticaBusy(options.signal);
                 const res = await fetch(url, {
                     ...options,
                     headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0", ...authHeaders, ...options.headers },
@@ -486,6 +507,15 @@ export const AcumaticaService = {
                     errorDetail = errJson.message || errJson.exceptionMessage || JSON.stringify(errJson);
                 } catch {
                     errorDetail = `HTTP ${res.status}`;
+                }
+
+                if (res.status === 429) {
+                    lastError = new Error(`HTTP 429 Too Many Requests (from ${url})`);
+                    if (attempts >= maxAttempts) break;
+                    const delay = busyRetryDelayMs(res.headers.get("retry-after"), attempts);
+                    markAcumaticaBusy(delay);
+                    console.warn(`>>> [Acumatica] Busy (HTTP 429) — waiting ${Math.round(delay / 1000)}s, retry ${attempts}/${maxAttempts - 1}`);
+                    continue;
                 }
 
                 lastError = new Error(`${errorDetail} (from ${url})`);
@@ -1196,7 +1226,7 @@ export const AcumaticaService = {
                         allRows.push(...rows);
                     } catch (winErr) {
                         // The caller signs in again and retries; later windows would fail the same way.
-                        if (/^Unauthorized$/i.test(String(winErr?.message || "").trim())) throw winErr;
+                        if (isAcumaticaUnauthorized(winErr)) throw winErr;
                         console.error(
                             `>>> [SalesSync] Window ${w.start}..${w.end} failed:`,
                             winErr?.message || winErr
@@ -1583,7 +1613,7 @@ export const AcumaticaService = {
                 console.log(`[Acumatica] PO status "${status}": ${count} order(s).`);
             } catch (err) {
                 // Every remaining status would fail too; the caller retries with a fresh login.
-                if (/^Unauthorized$/i.test(String(err?.message || "").trim())) throw err;
+                if (isAcumaticaUnauthorized(err)) throw err;
                 console.warn(`[Acumatica] PO status "${status}" fetch skipped:`, err?.message || err);
             }
         }

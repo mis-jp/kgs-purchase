@@ -1,5 +1,6 @@
 import mysql from "mysql2/promise";
-import { mergeDimensionsFillEmpty, hasAnyDimensionValue } from "@/lib/item-dimensions.js";
+import { mergeDimensionsFillEmpty, hasAnyDimensionValue, calcTotalCbm } from "@/lib/item-dimensions.js";
+import { inventoryDistinctCountSql } from "@/lib/inventory-sql.js";
 import {
     sqlExcludeEcomBranches,
     ECOM_BRANCH_ALIASES,
@@ -380,9 +381,7 @@ function inventoryPlanningCols(alias = "c") {
                     ${alias}.moq as MOQ`;
 }
 
-export function inventoryDistinctCountSql(alias = "i", outputAlias = "total") {
-    return `COUNT(DISTINCT TRIM(${alias}.inventory_id)) as ${outputAlias}`;
-}
+export { inventoryDistinctCountSql };
 
 function inventorySelectCols(layout) {
     if (layout === "warehouse") {
@@ -5268,6 +5267,73 @@ export const MySqlService = {
             cbm: r.cbm != null ? Number(r.cbm) : null,
             updatedAt: r.updated_at,
         };
+    },
+
+    /**
+     * Items on open purchase orders whose size or weight is missing, so packing-list
+     * CBM / weight would leave them out. Read-only; one branch or all branches.
+     */
+    async getOpenPoItemsMissingDimensions({ branch = "", includeOnHold = true } = {}) {
+        await this.ensureReceivedQtyColumn();
+        await this.ensurePoWarehouseColumns();
+        const openStatuses = openPoHeaderStatuses({ includeOnHold });
+        const params = [...openStatuses];
+        let branchClause = "";
+        const branchKey = String(branch || "").trim().toUpperCase();
+        if (branchKey) {
+            const destinations = getStockWarehouseIdsForBranch(branchKey);
+            if (!destinations.length) return [];
+            const match = sqlMatchOpenPoForBranch({ detailsAlias: "d", headerAlias: "h", destinations });
+            branchClause = `AND ${match.clause}`;
+            params.push(...match.params);
+        }
+        const qtyExpr = sqlPoLineOpenQty("d");
+        const [rows] = await purchasePool.query(
+            `SELECT
+                MAX(TRIM(d.inventory_id)) AS inventoryId,
+                MAX(d.description) AS description,
+                COALESCE(SUM(${qtyExpr}), 0) AS openQty,
+                COUNT(DISTINCT h.order_nbr) AS poCount,
+                MAX(h.order_date) AS latestOrderDate
+             FROM purchase_order_details d
+             INNER JOIN purchase_history h
+                ON h.order_nbr COLLATE utf8mb4_unicode_ci = d.order_nbr
+             WHERE h.status IN (${openStatuses.map(() => "?").join(", ")})
+               AND d.inventory_id IS NOT NULL
+               AND d.inventory_id != ''
+               AND (${qtyExpr}) > 0
+               ${branchClause}
+             GROUP BY UPPER(REPLACE(TRIM(d.inventory_id), ' ', ''))`,
+            params
+        );
+
+        const ids = rows.map((r) => String(r.inventoryId || "").trim()).filter(Boolean);
+        const dims = {};
+        for (let i = 0; i < ids.length; i += 500) {
+            Object.assign(dims, await this.getItemDimensionsBatch(ids.slice(i, i + 500)));
+        }
+
+        const out = [];
+        for (const r of rows) {
+            const id = String(r.inventoryId || "").trim();
+            if (!id) continue;
+            const dim = dims[id] || dims[id.toUpperCase()] || null;
+            const missingSize = !dim || calcTotalCbm({ ...dim, qty: 1 }) === null;
+            const missingWeight = !dim || !(Number(dim.weight_kg) > 0);
+            if (!missingSize && !missingWeight) continue;
+            out.push({
+                inventoryId: id,
+                description: r.description || "",
+                openQty: Number(r.openQty) || 0,
+                poCount: Number(r.poCount) || 0,
+                latestOrderDate: r.latestOrderDate || null,
+                missingSize,
+                missingWeight,
+                hasRecord: Boolean(dim),
+            });
+        }
+        out.sort((a, b) => b.poCount - a.poCount || b.openQty - a.openQty || a.inventoryId.localeCompare(b.inventoryId));
+        return out;
     },
 
     async getItemDimensionsBatch(inventoryIds = []) {

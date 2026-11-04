@@ -576,11 +576,13 @@ const ORIGIN_OPTIONS = ["Philippines", "China"];
 
 function PoDateInput({ value = "", onChange, className = "", style }) {
     const [text, setText] = useState(() => isoToYmd(value));
+    const [syncedValue, setSyncedValue] = useState(value);
     const pickerRef = useRef(null);
 
-    useEffect(() => {
+    if (value !== syncedValue) {
+        setSyncedValue(value);
         setText(isoToYmd(value));
-    }, [value]);
+    }
 
     const commitText = (raw) => {
         const trimmed = String(raw || "").trim();
@@ -1096,8 +1098,8 @@ export default function PurchaseOrdersPage() {
                     setBranchOptions(options);
                     const allowAll = await loadAllBranchesAccess(fetchWithAuth);
                     if (active) setAllowAllBranches(allowAll);
-                    if (!allowAll && options[0] && !options.some((b) => b.id === selectedBranch)) {
-                        setSelectedBranch(options[0].id);
+                    if (active && !allowAll && options[0]) {
+                        setSelectedBranch((current) => (options.some((b) => b.id === current) ? current : options[0].id));
                     }
                 }
             } catch (err) {
@@ -1464,7 +1466,13 @@ export default function PurchaseOrdersPage() {
     ]);
 
     useEffect(() => {
-        fetchOrders();
+        let active = true;
+        Promise.resolve().then(() => {
+            if (active) fetchOrders();
+        });
+        return () => {
+            active = false;
+        };
     }, [fetchOrders]);
 
     useEffect(() => {
@@ -1487,7 +1495,9 @@ export default function PurchaseOrdersPage() {
     }, [fetchOrders]);
 
     const fetchOrdersRef = useRef(fetchOrders);
-    fetchOrdersRef.current = fetchOrders;
+    useEffect(() => {
+        fetchOrdersRef.current = fetchOrders;
+    }, [fetchOrders]);
 
     useEffect(() => {
         let cancelled = false;

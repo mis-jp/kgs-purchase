@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { cacheIsFresh } from '../lib/server-cache.js';
-import { inventoryDistinctCountSql } from '../services/mysql.js';
+import { inventoryDistinctCountSql } from '../lib/inventory-sql.js';
 
 test('cacheIsFresh returns true within the TTL window', () => {
   const now = 1_000;

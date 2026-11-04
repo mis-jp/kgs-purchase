@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import { withBasePath } from "@/lib/base-path";
 import { DIMENSION_FIELDS, calcPieceWeightKg, calcStockWeightKg, formatWeightKg } from "@/lib/item-dimensions";
+import { missingDimensionsSheetRows } from "@/lib/missing-dimensions";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
@@ -64,6 +65,7 @@ export default function StockItemsPage() {
     const [selectedId, setSelectedId] = useState(null);
     const [exporting, setExporting] = useState(false);
     const [importing, setImporting] = useState(false);
+    const [downloadingMissing, setDownloadingMissing] = useState(false);
     const [importMsg, setImportMsg] = useState(null);
     const [importProgress, setImportProgress] = useState(0);
     const [importStatus, setImportStatus] = useState("");
@@ -81,6 +83,41 @@ export default function StockItemsPage() {
             console.error("Export failed", e);
         } finally {
             setTimeout(() => setExporting(false), 2000);
+        }
+    };
+
+    const handleDownloadMissingSizes = async () => {
+        setDownloadingMissing(true);
+        setImportMsg(null);
+        setImportError(false);
+        try {
+            const res = await fetchWithAuth("/api/stock-items/dimensions/missing");
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.message || "Could not load items missing sizes.");
+            const items = data.items || [];
+            if (!items.length) {
+                setImportMsg("Every item on an open purchase order already has its size and weight.");
+                return;
+            }
+            const XLSX = await import("xlsx");
+            const sheet = XLSX.utils.aoa_to_sheet(missingDimensionsSheetRows(items));
+            sheet["!cols"] = [18, 9, 13, 13, 13, 8, 10, 44, 12, 9, 16].map((wch) => ({ wch }));
+            const book = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(book, sheet, "Data");
+            const now = new Date();
+            const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+            XLSX.writeFile(book, `Missing_Sizes_Open_PO_${stamp}.xlsx`);
+            setImportMsg(
+                `Downloaded ${items.length.toLocaleString()} item(s) on open purchase orders with no size or weight. ` +
+                "Fill in the size columns and use Import dimensions to upload the same file."
+            );
+        } catch (err) {
+            if (err.message !== "Unauthorized") {
+                setImportError(true);
+                setImportMsg(err.message || "Could not load items missing sizes.");
+            }
+        } finally {
+            setDownloadingMissing(false);
         }
     };
 
@@ -499,6 +536,16 @@ export default function StockItemsPage() {
                                 </div>
                             )}
                         </div>
+
+                        <button
+                            type="button"
+                            className="si-btn si-btn-ghost"
+                            onClick={handleDownloadMissingSizes}
+                            disabled={downloadingMissing || importing}
+                            title="Download items on open purchase orders that have no size or weight, ready to fill in and import"
+                        >
+                            {downloadingMissing ? "Preparing…" : "Missing sizes on open POs"}
+                        </button>
 
                         <button
                             type="button"

@@ -102,7 +102,7 @@ test("accepts either env secret during rotation when the fingerprint matches one
 
 test("wrong secret", () => {
     const result = verify({ signed: { secret: "other-secret" } });
-    assert.deepEqual(result, { ok: false, status: 401, message: "Inventory bridge not configured" });
+    assert.deepEqual(result, { ok: false, status: 401, message: "Inventory bridge not configured", reason: "signature" });
 });
 
 test("old timestamp", () => {
