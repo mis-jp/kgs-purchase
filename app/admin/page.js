@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchWithAuth } from "@/lib/api-client";
+import SyncHealthPanel from "@/components/admin/SyncHealthPanel";
 import "@/styles/admin.css";
 
 const EMPTY_FORM = {
@@ -113,7 +114,7 @@ export default function AdminPage() {
     }, [router]);
 
     useEffect(() => {
-        load();
+        Promise.resolve().then(load);
     }, [load]);
 
     useEffect(() => {
@@ -321,6 +322,8 @@ export default function AdminPage() {
 
             {error && <div className="admin-alert admin-alert--error" role="alert">{error}</div>}
             {notice && <div className="admin-alert admin-alert--ok" role="status">{notice}</div>}
+
+            <SyncHealthPanel />
 
             <section className="admin-card">
                 <h2>Replenishment sales window</h2>

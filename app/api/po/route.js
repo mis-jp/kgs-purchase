@@ -9,7 +9,7 @@ import {
 import { getSystemAcumaticaCredential } from "@/lib/acumatica-system-auth";
 import { AcumaticaService } from "@/services/acumatica";
 import { MySqlService } from "@/services/mysql";
-import { kickCached } from "@/lib/server-cache";
+import { kickJob } from "@/lib/background-jobs";
 import { alignAllOpenPurchaseOrderStatuses } from "@/lib/po-open-status-align";
 import { ensurePurchaseVendorNames, withVendorNameTimeout } from "@/lib/po-vendor-names";
 
@@ -139,7 +139,7 @@ export async function GET(request) {
             try {
                 // Background only — never block the PO list behind Acumatica align
                 // or heavy MySQL repairs (those were causing nginx HTTP 504s).
-                kickCached("job:po-align-open-status-v5-hold", 10 * 60_000, async () => {
+                kickJob("job:po-align-open-status-v5-hold", 10 * 60_000, async () => {
                     const cred = poCred && poCred !== "__bypass__"
                         ? poCred
                         : await getSystemAcumaticaCredential();
@@ -150,7 +150,7 @@ export async function GET(request) {
                     });
                 });
 
-                kickCached("job:po-repair-data-v2", 15 * 60_000, async () => {
+                kickJob("job:po-repair-data-v2", 15 * 60_000, async () => {
                     const aliases = await MySqlService.normalizePurchaseOrderStatusAliases();
                     const vendors = await MySqlService.backfillPurchaseHistoryVendorNames();
                     const amounts = await MySqlService.repairPurchaseOrderAmounts();
@@ -169,7 +169,7 @@ export async function GET(request) {
                     );
                 }
                 if (vendorCred) {
-                    kickCached("job:po-fill-vendor-names-v4", 10 * 60_000, () =>
+                    kickJob("job:po-fill-vendor-names-v4", 10 * 60_000, () =>
                         ensurePurchaseVendorNames({ cookie: vendorCred })
                     );
                 }
@@ -185,7 +185,7 @@ export async function GET(request) {
                         ...result,
                         orders: await enrichVendorNames(result.orders),
                     };
-                    kickCached("job:po-repair-vendors-once", 15 * 60_000, async () =>
+                    kickJob("job:po-repair-vendors-once", 15 * 60_000, async () =>
                         MySqlService.backfillPurchaseHistoryVendorNames()
                     );
                 }

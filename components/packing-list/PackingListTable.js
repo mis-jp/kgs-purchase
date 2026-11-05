@@ -3,6 +3,9 @@
 import { useMemo, useState } from "react";
 import {
     PACKING_COLUMNS,
+    containerMixText,
+    containerOptions,
+    recommendContainerMix,
     packingLineKey,
     packingLineTotals,
     packingSheetRows,
@@ -20,6 +23,18 @@ function formatDate(value) {
 function num(value, digits = 0) {
     if (value === null || value === undefined) return "—";
     return Number(value).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function FillBar({ label, pct }) {
+    const width = Math.min(100, Math.max(0, pct));
+    return (
+        <div className="pl-fill">
+            <span className="pl-fill-label">{label} {pct}%</span>
+            <span className="pl-fill-track" aria-hidden="true">
+                <span className={`pl-fill-bar${pct > 95 ? " pl-fill-bar--full" : ""}`} style={{ width: `${width}%` }} />
+            </span>
+        </div>
+    );
 }
 
 function qtyText(value) {
@@ -43,6 +58,8 @@ export default function PackingListTable({
     const sorted = useMemo(() => sortPackingLines(lines), [lines]);
     const totals = useMemo(() => packingTotals(lines, manual, branch), [lines, manual, branch]);
     const missingSize = Math.max(totals.missingCbm, totals.missingWeight);
+    const containers = useMemo(() => containerOptions(totals.cbm, totals.weightKg), [totals.cbm, totals.weightKg]);
+    const mix = useMemo(() => recommendContainerMix(totals.cbm, totals.weightKg), [totals.cbm, totals.weightKg]);
     const hasManual = sorted.some((l) => manual[packingLineKey(branch, l.orderNbr, l.lineNbr, l.inventoryId)] !== undefined);
 
     const exportExcel = async () => {
@@ -64,8 +81,14 @@ export default function PackingListTable({
                 ["Total weight (kg)", totals.weightKg],
                 ["Lines without size", totals.missingCbm],
                 ["Lines without weight", totals.missingWeight],
+                [],
+                ["Suggested containers", containerMixText(mix) || "—"],
+                ...containers.map((c) => [
+                    c.label,
+                    `${c.count} container(s), ${c.cbmFillPct}% volume, ${c.weightFillPct}% weight`,
+                ]),
             ]);
-            summary["!cols"] = [{ wch: 22 }, { wch: 16 }];
+            summary["!cols"] = [{ wch: 22 }, { wch: 48 }];
             const book = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(book, sheet, "Packing List");
             XLSX.utils.book_append_sheet(book, summary, "Summary");
@@ -180,6 +203,34 @@ export default function PackingListTable({
                     {missingSize > 0 && (
                         <div className="pl-note">
                             {missingSize} line(s) have no size or weight in Stock Items, so they are left out of the totals.
+                        </div>
+                    )}
+                    {!loading && containers.length > 0 && (
+                        <div className="pl-containers" aria-label="Container planning">
+                            <div className="pl-containers-head">
+                                <h4>Container planning</h4>
+                                <span className="pl-containers-mix">
+                                    Suggested: <strong>{containerMixText(mix)}</strong>
+                                </span>
+                            </div>
+                            <div className="pl-containers-grid">
+                                {containers.map((c) => (
+                                    <div key={c.id} className="pl-container-card">
+                                        <span className="pl-container-label">{c.label}</span>
+                                        <strong className="pl-container-count">{c.count} needed</strong>
+                                        <FillBar label="Volume" pct={c.cbmFillPct} />
+                                        <FillBar label="Weight" pct={c.weightFillPct} />
+                                        {c.limitedBy === "weight" && (
+                                            <span className="pl-container-hint">Weight sets the count</span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="pl-note">
+                                Uses practical loading limits: 20ft 28 m³ / 21,000 kg, 40ft 58 m³ / 26,000 kg,
+                                40ft High Cube 68 m³ / 26,000 kg.
+                                {missingSize > 0 ? " Lines without size or weight are not counted." : ""}
+                            </p>
                         </div>
                     )}
                 </>

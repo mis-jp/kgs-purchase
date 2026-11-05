@@ -17,6 +17,10 @@ const toISODate = (date) => date.toISOString().split("T")[0];
 /** After a 429 every caller in this process pauses until Acumatica's cool-down ends. */
 let acumaticaBusyUntil = 0;
 
+export function getAcumaticaBusyUntil() {
+    return acumaticaBusyUntil;
+}
+
 function markAcumaticaBusy(delayMs) {
     acumaticaBusyUntil = Math.max(acumaticaBusyUntil, Date.now() + delayMs);
 }

@@ -51,6 +51,12 @@ const IconSparkles = () => (
   </svg>
 );
 
+const IconPackingList = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect width="20" height="5" x="2" y="3" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" />
+  </svg>
+);
+
 const IconForecast = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 3v18h18" /><path d="m19 9-5 5-4-4-3 3" />
@@ -225,7 +231,7 @@ export default function Sidebar() {
 
   // Close sidebar on navigation (mobile)
   useEffect(() => {
-    setIsOpen(false);
+    Promise.resolve().then(() => setIsOpen(false));
   }, [pathname]);
 
   const accessUser = { role: userRole, allowedModules };
@@ -236,6 +242,7 @@ export default function Sidebar() {
     { name: "Incoming PO", href: "/incoming-po", icon: <IconPO />, moduleId: "incoming-po" },
     { name: "Suppliers", href: "/suppliers", icon: <IconTruck />, moduleId: "suppliers" },
     { name: "Replenishment", href: "/replenishment", icon: <IconSparkles />, moduleId: "replenishment" },
+    { name: "Packing List Generator", href: "/packing-list", icon: <IconPackingList />, moduleId: "packing-list" },
     { name: "Forecast Generator", href: "/forecast-generator", icon: <IconForecast />, moduleId: FORECAST_MODULE },
     { name: "Last 3 Months Sales", href: "/sales", icon: <IconSales />, moduleId: "sales" },
     { name: "Syncing Center", href: "/syncing", icon: <IconSync />, tourId: "nav-sync", moduleId: "syncing" },

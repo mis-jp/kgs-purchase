@@ -5,17 +5,16 @@ import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { isEtdBeyondContainer, isEtdBeyondOrderStatus, poDetailHref } from "@/lib/po-metrics";
 import { formatWeightKg } from "@/lib/item-dimensions";
 import PoLinesTable from "@/components/PoLinesTable";
-import PackingListGenerator from "@/components/packing-list/PackingListGenerator";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/po.css";
 import "@/styles/inventory-detail.css";
-import "@/styles/packing-list.css";
 
 const PAGE_SIZE = 10;
 
@@ -991,15 +990,7 @@ export default function PurchaseOrdersPage() {
     const [columnFilters, setColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [debColumnFilters, setDebColumnFilters] = useState(EMPTY_COLUMN_FILTERS);
     const [exporting, setExporting] = useState(false);
-    const [view, setView] = useState("orders");
-
-    const changeView = useCallback((next) => {
-        setView(next);
-        const url = new URL(window.location.href);
-        if (next === "packing") url.searchParams.set("view", "packing");
-        else url.searchParams.delete("view");
-        window.history.replaceState(window.history.state, "", url);
-    }, []);
+    const router = useRouter();
 
     const setColumnFilter = useCallback((field, value) => {
         const next = value || "";
@@ -1045,7 +1036,10 @@ export default function PurchaseOrdersPage() {
         const yearStart = yearStartIso();
 
         Promise.resolve().then(async () => {
-            if (new URLSearchParams(window.location.search).get("view") === "packing") setView("packing");
+            if (new URLSearchParams(window.location.search).get("view") === "packing") {
+                router.replace("/packing-list");
+                return;
+            }
             // 1. Load filters — From defaults to Jan 1 of current year; To = today
             if (savedPage) setPage(parseInt(savedPage));
             if (savedSearch) setSearch(savedSearch);
@@ -1079,7 +1073,7 @@ export default function PurchaseOrdersPage() {
 
             isInitialMount.current = false;
         });
-    }, []);
+    }, [router]);
 
     useEffect(() => {
         let active = true;
@@ -1762,60 +1756,27 @@ export default function PurchaseOrdersPage() {
                         <h1>Purchase Orders</h1>
                         <p>View and manage all purchase orders live from Acumatica ERP.</p>
                     </div>
-                    {view === "orders" && (
-                        <>
-                            <EtdBeyondContainerPanel
-                                containerCount={etdBeyond.containerCount}
-                                orderCount={etdBeyond.orderNbrs.length}
-                                filtering={etdBeyondFilter}
-                                onToggleFilter={() => setEtdBeyondFilter((v) => !v)}
-                            />
-                            <ShipOutOverduePanel
-                                shipmentCount={overdueShipOut.shipmentCount}
-                                orderCount={overdueShipOut.orderNbrs.length}
-                                filtering={overdueShipOutFilter}
-                                onToggleFilter={() => setOverdueShipOutFilter((v) => !v)}
-                            />
-                            <UserStatusGuidePanel
-                                activeTab={statusGuideTab}
-                                onTabChange={setStatusGuideTab}
-                                onFilterTable={handleUserStatusTableFilter}
-                                tableFilter={userStatusTableFilter}
-                            />
-                        </>
-                    )}
-                </div>
-
-                <div className="po-view-tabs" role="tablist" aria-label="Purchase Orders views">
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={view === "orders"}
-                        className={`po-view-tab ${view === "orders" ? "is-active" : ""}`}
-                        onClick={() => changeView("orders")}
-                    >
-                        Purchase Orders
-                    </button>
-                    <button
-                        type="button"
-                        role="tab"
-                        aria-selected={view === "packing"}
-                        className={`po-view-tab ${view === "packing" ? "is-active" : ""}`}
-                        onClick={() => changeView("packing")}
-                    >
-                        Packing List Generator
-                    </button>
-                </div>
-
-                {view === "packing" && (
-                    <PackingListGenerator
-                        branchOptions={branchOptions}
-                        allowAllBranches={allowAllBranches}
-                        defaultBranch={selectedBranch}
+                    <EtdBeyondContainerPanel
+                        containerCount={etdBeyond.containerCount}
+                        orderCount={etdBeyond.orderNbrs.length}
+                        filtering={etdBeyondFilter}
+                        onToggleFilter={() => setEtdBeyondFilter((v) => !v)}
                     />
-                )}
+                    <ShipOutOverduePanel
+                        shipmentCount={overdueShipOut.shipmentCount}
+                        orderCount={overdueShipOut.orderNbrs.length}
+                        filtering={overdueShipOutFilter}
+                        onToggleFilter={() => setOverdueShipOutFilter((v) => !v)}
+                    />
+                    <UserStatusGuidePanel
+                        activeTab={statusGuideTab}
+                        onTabChange={setStatusGuideTab}
+                        onFilterTable={handleUserStatusTableFilter}
+                        tableFilter={userStatusTableFilter}
+                    />
+                </div>
 
-                <div className="po-orders-view" hidden={view !== "orders"}>
+                <div className="po-orders-view">
                 <aside className="po-summary-strip" aria-label="Purchase order summary" data-tour="kpi-cards">
                     <div className="po-summary-card">
                         <h3 className="po-summary-title">

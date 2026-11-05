@@ -33,6 +33,7 @@ const ROUTES = [
   { path: "/incoming-po", changeFrequency: "daily", priority: 0.8 },
   { path: "/suppliers", changeFrequency: "weekly", priority: 0.7 },
   { path: "/replenishment", changeFrequency: "daily", priority: 0.8 },
+  { path: "/packing-list", changeFrequency: "daily", priority: 0.7 },
   { path: "/forecast-generator", changeFrequency: "daily", priority: 0.8 },
   { path: "/sales", changeFrequency: "daily", priority: 0.7 },
   { path: "/stock-items", changeFrequency: "weekly", priority: 0.7 },

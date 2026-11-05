@@ -25,7 +25,7 @@ export async function POST(request) {
         }
         console.error("[PO live]", err?.message || err);
         return NextResponse.json(
-            { synced: 0, more: false, message: err?.message || "Purchase order refresh failed" },
+            { synced: 0, more: false, message: "Purchase order refresh failed. It will retry shortly." },
             { status: 500 }
         );
     }
