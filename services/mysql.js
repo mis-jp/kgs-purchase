@@ -5269,6 +5269,110 @@ export const MySqlService = {
         };
     },
 
+    async ensurePackingListsTable() {
+        if (MySqlService._packingListsReady) return;
+        await purchasePool.query(`
+            CREATE TABLE IF NOT EXISTS packing_lists (
+              id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              name VARCHAR(150) NOT NULL,
+              branch_id VARCHAR(100) NOT NULL,
+              order_nbrs JSON NOT NULL,
+              manual_qty JSON NULL,
+              trucking_fee DECIMAL(18,2) NULL,
+              created_by VARCHAR(64) NULL,
+              updated_by VARCHAR(64) NULL,
+              created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              PRIMARY KEY (id),
+              KEY idx_packing_lists_branch (branch_id, updated_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        MySqlService._packingListsReady = true;
+    },
+
+    _mapPackingList(row) {
+        const parse = (v, fallback) => {
+            if (v == null) return fallback;
+            if (typeof v === "object") return v;
+            try { return JSON.parse(v); } catch { return fallback; }
+        };
+        const orderNbrs = parse(row.order_nbrs, []);
+        return {
+            id: Number(row.id),
+            name: row.name,
+            branch: row.branch_id,
+            orderNbrs: Array.isArray(orderNbrs) ? orderNbrs : [],
+            manualQty: parse(row.manual_qty, {}) || {},
+            truckingFee: row.trucking_fee == null ? null : Number(row.trucking_fee),
+            createdBy: row.created_by || null,
+            updatedBy: row.updated_by || null,
+            createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+            updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+        };
+    },
+
+    /** Saved packing lists, newest first. `branches` limits rows for branch-restricted users. */
+    async listPackingLists({ branch = "", branches = null, limit = 100 } = {}) {
+        await this.ensurePackingListsTable();
+        const where = [];
+        const params = [];
+        if (branch) {
+            where.push("branch_id = ?");
+            params.push(branch);
+        }
+        if (Array.isArray(branches)) {
+            if (!branches.length) return [];
+            where.push(`branch_id IN (${branches.map(() => "?").join(", ")})`);
+            params.push(...branches);
+        }
+        const [rows] = await purchasePool.query(
+            `SELECT id, name, branch_id, order_nbrs, manual_qty, trucking_fee, created_by, updated_by, created_at, updated_at
+             FROM packing_lists
+             ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?`,
+            [...params, Math.min(500, Math.max(1, Number(limit) || 100))]
+        );
+        return rows.map((r) => this._mapPackingList(r));
+    },
+
+    async getPackingList(id) {
+        await this.ensurePackingListsTable();
+        const [rows] = await purchasePool.query(
+            `SELECT id, name, branch_id, order_nbrs, manual_qty, trucking_fee, created_by, updated_by, created_at, updated_at
+             FROM packing_lists WHERE id = ? LIMIT 1`,
+            [id]
+        );
+        return rows[0] ? this._mapPackingList(rows[0]) : null;
+    },
+
+    async createPackingList({ name, branch, orderNbrs, manualQty, truckingFee }, username = null) {
+        await this.ensurePackingListsTable();
+        const [res] = await purchasePool.query(
+            `INSERT INTO packing_lists (name, branch_id, order_nbrs, manual_qty, trucking_fee, created_by, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [name, branch, JSON.stringify(orderNbrs), JSON.stringify(manualQty || {}), truckingFee, username, username]
+        );
+        return this.getPackingList(res.insertId);
+    },
+
+    async updatePackingList(id, { name, branch, orderNbrs, manualQty, truckingFee }, username = null) {
+        await this.ensurePackingListsTable();
+        await purchasePool.query(
+            `UPDATE packing_lists
+             SET name = ?, branch_id = ?, order_nbrs = ?, manual_qty = ?, trucking_fee = ?, updated_by = ?
+             WHERE id = ?`,
+            [name, branch, JSON.stringify(orderNbrs), JSON.stringify(manualQty || {}), truckingFee, username, id]
+        );
+        return this.getPackingList(id);
+    },
+
+    async deletePackingList(id) {
+        await this.ensurePackingListsTable();
+        const [res] = await purchasePool.query("DELETE FROM packing_lists WHERE id = ?", [id]);
+        return res.affectedRows > 0;
+    },
+
     /**
      * Items on open purchase orders whose size or weight is missing, so packing-list
      * CBM / weight would leave them out. Read-only; one branch or all branches.

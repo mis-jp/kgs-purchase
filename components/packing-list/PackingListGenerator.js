@@ -5,6 +5,7 @@ import { fetchWithAuth } from "@/lib/api-client";
 import { packingLineKey } from "@/lib/packing-list";
 import PoPickList from "./PoPickList";
 import PackingListTable from "./PackingListTable";
+import SavedPackingLists from "./SavedPackingLists";
 
 const MANUAL_STORAGE_KEY = "po_packing_manual_qty";
 const TRUCKING_FEE_STORAGE_KEY = "po_packing_trucking_fee";
@@ -237,6 +238,21 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
         });
     };
 
+    const loadSaved = (list) => {
+        const orders = (list.orderNbrs || []).slice(0, MAX_SELECTED);
+        const prefixes = orders.map((nbr) => `${branch}|${nbr}|`);
+        setSelected(orders);
+        setManual((prev) => {
+            const kept = Object.fromEntries(
+                Object.entries(prev).filter(([k]) => !prefixes.some((p) => k.startsWith(p)))
+            );
+            const next = { ...kept, ...(list.manualQty || {}) };
+            writeManual(next);
+            return next;
+        });
+        changeTruckingFee(list.truckingFee == null ? "" : String(list.truckingFee));
+    };
+
     const clearManual = () => {
         const keys = new Set(lines.map((l) => packingLineKey(branch, l.orderNbr, l.lineNbr, l.inventoryId)));
         setManual((prev) => {
@@ -305,6 +321,14 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
                     />
                 </div>
             </div>
+
+            <SavedPackingLists
+                branch={branch}
+                selected={selected}
+                manual={manual}
+                truckingFee={truckingFee}
+                onLoad={loadSaved}
+            />
 
             {!branch ? (
                 <div className="pl-empty pl-empty-wide">Pick a branch to see its purchase orders.</div>

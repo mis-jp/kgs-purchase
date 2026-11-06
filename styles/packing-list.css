@@ -314,6 +314,65 @@
     color: var(--status-danger);
 }
 
+.pl-saved {
+    margin-bottom: 0.9rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-surface);
+}
+
+.pl-saved-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem 1rem;
+}
+
+.pl-saved-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 240px;
+    font-size: 0.72rem;
+    font-weight: 750;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.pl-saved-field select {
+    max-width: 460px;
+}
+
+.pl-saved-name {
+    flex: 1 1 220px;
+}
+
+.pl-saved-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.pl-link-danger {
+    color: var(--status-danger);
+}
+
+.pl-saved-msg {
+    margin-top: 0.55rem;
+    font-size: 0.8rem;
+}
+
+.pl-saved-msg.is-ok {
+    color: var(--status-success);
+}
+
+.pl-saved-msg.is-error {
+    color: var(--status-danger);
+}
+
 .pl-freight-bar {
     display: flex;
     flex-wrap: wrap;
