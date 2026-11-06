@@ -7,6 +7,7 @@ import PoPickList from "./PoPickList";
 import PackingListTable from "./PackingListTable";
 
 const MANUAL_STORAGE_KEY = "po_packing_manual_qty";
+const TRUCKING_FEE_STORAGE_KEY = "po_packing_trucking_fee";
 const PAGE_SIZE = 50;
 const LINES_CHUNK = 50;
 const MAX_SELECTED = 200;
@@ -31,6 +32,15 @@ function writeManual(map) {
         localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(map));
     } catch {
         /* storage full or blocked: manual qty stays for this visit only */
+    }
+}
+
+function readTruckingFee() {
+    if (typeof window === "undefined") return "";
+    try {
+        return localStorage.getItem(TRUCKING_FEE_STORAGE_KEY) || "";
+    } catch {
+        return "";
     }
 }
 
@@ -72,6 +82,17 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
     const [linesTick, setLinesTick] = useState(0);
 
     const [manual, setManual] = useState(readManual);
+    const [truckingFee, setTruckingFee] = useState(readTruckingFee);
+
+    const changeTruckingFee = (value) => {
+        setTruckingFee(value);
+        try {
+            if (String(value).trim() === "") localStorage.removeItem(TRUCKING_FEE_STORAGE_KEY);
+            else localStorage.setItem(TRUCKING_FEE_STORAGE_KEY, value);
+        } catch {
+            /* storage blocked: fee stays for this visit only */
+        }
+    };
 
     const branch = useMemo(() => {
         if (allowAllBranches) return branchPick;
@@ -316,6 +337,8 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
                         manual={manual}
                         onManualChange={changeManual}
                         onClearManual={clearManual}
+                        truckingFee={truckingFee}
+                        onTruckingFeeChange={changeTruckingFee}
                     />
                 </div>
             )}

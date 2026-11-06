@@ -78,7 +78,7 @@ test("lines sort newest order first, then line number", () => {
 });
 
 test("sheet rows follow the column order and end with totals", () => {
-    assert.equal(PACKING_COLUMNS.length, 9);
+    assert.equal(PACKING_COLUMNS.length, 11);
     const rows = packingSheetRows([lineA, lineB], {}, "TAR");
     assert.equal(rows.length, 3);
     const [branch, orderNbr, date, desc, inv, orderQty, manualQty, cbm, kg] = rows[0];
@@ -92,5 +92,5 @@ test("sheet rows follow the column order and end with totals", () => {
     assert.equal(cbm, 0.2);
     assert.equal(kg, 40);
     assert.equal(rows[1][7], null);
-    assert.deepEqual(rows[2], ["Total", "1 PO(s)", null, "2 line(s)", null, null, 25, 0.2, 40]);
+    assert.deepEqual(rows[2], ["Total", "1 PO(s)", null, "2 line(s)", null, null, 25, 0.2, 40, null, null]);
 });

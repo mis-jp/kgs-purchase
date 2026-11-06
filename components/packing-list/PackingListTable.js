@@ -5,6 +5,9 @@ import {
     PACKING_COLUMNS,
     containerMixText,
     containerOptions,
+    freightRatePerCbm,
+    packingLineFreight,
+    parseManualQty,
     recommendContainerMix,
     packingLineKey,
     packingLineTotals,
@@ -51,6 +54,8 @@ export default function PackingListTable({
     manual,
     onManualChange,
     onClearManual,
+    truckingFee = "",
+    onTruckingFeeChange,
 }) {
     const [exporting, setExporting] = useState(false);
     const [exportError, setExportError] = useState("");
@@ -61,6 +66,16 @@ export default function PackingListTable({
     const containers = useMemo(() => containerOptions(totals.cbm, totals.weightKg), [totals.cbm, totals.weightKg]);
     const mix = useMemo(() => recommendContainerMix(totals.cbm, totals.weightKg), [totals.cbm, totals.weightKg]);
     const hasManual = sorted.some((l) => manual[packingLineKey(branch, l.orderNbr, l.lineNbr, l.inventoryId)] !== undefined);
+    const fee = parseManualQty(truckingFee);
+    const feeInvalid = String(truckingFee).trim() !== "" && fee === null;
+    const rate = freightRatePerCbm(truckingFee, totals.cbm);
+    const freightTotal = useMemo(() => {
+        if (rate === null) return null;
+        return sorted.reduce((sum, line) => {
+            const t = packingLineTotals(line, manual[packingLineKey(branch, line.orderNbr, line.lineNbr, line.inventoryId)]);
+            return sum + (packingLineFreight(t, rate).freight || 0);
+        }, 0);
+    }, [sorted, manual, branch, rate]);
 
     const exportExcel = async () => {
         setExporting(true);
@@ -68,10 +83,16 @@ export default function PackingListTable({
         try {
             const XLSX = await import("xlsx");
             const sheet = XLSX.utils.aoa_to_sheet(
-                [PACKING_COLUMNS, ...packingSheetRows(lines, manual, branch)],
+                [
+                    [null, "Trucking Fee", fee],
+                    [null, "Rate per cbm", rate === null ? null : Math.round(rate * 100) / 100],
+                    [],
+                    PACKING_COLUMNS,
+                    ...packingSheetRows(lines, manual, branch, truckingFee),
+                ],
                 { cellDates: true, dateNF: "yyyy-mm-dd" }
             );
-            sheet["!cols"] = [10, 14, 12, 48, 18, 11, 12, 12, 13].map((wch) => ({ wch }));
+            sheet["!cols"] = [10, 14, 12, 48, 18, 11, 12, 12, 13, 18, 11].map((wch) => ({ wch }));
             const summary = XLSX.utils.aoa_to_sheet([
                 ["Branch", branch],
                 ["Purchase orders", totals.orderCount],
@@ -81,6 +102,9 @@ export default function PackingListTable({
                 ["Total weight (kg)", totals.weightKg],
                 ["Lines without size", totals.missingCbm],
                 ["Lines without weight", totals.missingWeight],
+                ["Trucking fee", fee],
+                ["Rate per CBM", rate === null ? null : Math.round(rate * 100) / 100],
+                ["Total freight", freightTotal === null ? null : Math.round(freightTotal * 100) / 100],
                 [],
                 ["Suggested containers", containerMixText(mix) || "—"],
                 ...containers.map((c) => [
@@ -125,6 +149,35 @@ export default function PackingListTable({
             </div>
             {exportError && <div className="si-error">{exportError}</div>}
 
+            {selectedCount > 0 && !error && (
+                <div className="pl-freight-bar">
+                    <label className="pl-freight-field">
+                        <span>Trucking Fee</span>
+                        <input
+                            className={`pl-qty-input pl-freight-input${feeInvalid ? " is-invalid" : ""}`}
+                            type="text"
+                            inputMode="decimal"
+                            value={truckingFee}
+                            placeholder="0.00"
+                            onChange={(e) => onTruckingFeeChange?.(e.target.value)}
+                            aria-label="Trucking fee"
+                            title="Total trucking cost. It is shared across lines by CBM."
+                        />
+                    </label>
+                    <div className="pl-freight-field">
+                        <span>Rate per CBM</span>
+                        <strong>{rate === null ? "—" : num(rate, 2)}</strong>
+                    </div>
+                    <span className="pl-freight-hint">
+                        {feeInvalid
+                            ? "Enter the trucking fee as a number, e.g. 44000."
+                            : fee !== null && rate === null
+                                ? "No CBM yet: add sizes in Stock Items to share the fee."
+                                : "Freight per line = line CBM × rate. Freight/Pc = line freight ÷ qty."}
+                    </span>
+                </div>
+            )}
+
             {selectedCount === 0 ? (
                 <div className="pl-empty">Tick one or more PO numbers on the left to build the packing list.</div>
             ) : error ? (
@@ -144,7 +197,7 @@ export default function PackingListTable({
                                 <thead>
                                     <tr>
                                         {PACKING_COLUMNS.map((c) => (
-                                            <th key={c} className={c.startsWith("Order Qty") || c.startsWith("Qty") || c.startsWith("Total") ? "pl-num" : undefined}>
+                                            <th key={c} className={/^(Order Qty|Qty|Total|Freight)/.test(c) ? "pl-num" : undefined}>
                                                 {c}
                                             </th>
                                         ))}
@@ -155,6 +208,7 @@ export default function PackingListTable({
                                         const key = packingLineKey(branch, line.orderNbr, line.lineNbr, line.inventoryId);
                                         const value = manual[key] ?? "";
                                         const t = packingLineTotals(line, value);
+                                        const f = packingLineFreight(t, rate);
                                         return (
                                             <tr key={`${key}#${i}`} className={t.overOrdered ? "pl-row-over" : undefined}>
                                                 <td>{branch}</td>
@@ -180,6 +234,8 @@ export default function PackingListTable({
                                                 </td>
                                                 <td className="pl-num">{num(t.cbm, 4)}</td>
                                                 <td className="pl-num">{t.weightKg === null ? "—" : `${num(t.weightKg, 2)} kg`}</td>
+                                                <td className="pl-num">{num(f.freight, 2)}</td>
+                                                <td className="pl-num">{num(f.freightPerPc, 2)}</td>
                                             </tr>
                                         );
                                     })}
@@ -195,6 +251,8 @@ export default function PackingListTable({
                                         <td className="pl-num">{qtyText(totals.qty)}</td>
                                         <td className="pl-num">{num(totals.cbm, 4)}</td>
                                         <td className="pl-num">{num(totals.weightKg, 2)} kg</td>
+                                        <td className="pl-num pl-freight-total">{num(freightTotal, 2)}</td>
+                                        <td />
                                     </tr>
                                 </tfoot>
                             </table>
