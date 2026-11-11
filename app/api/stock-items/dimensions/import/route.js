@@ -70,12 +70,19 @@ export async function POST(request) {
             if (dim) parsed.push(dim);
         }
 
-        const result = await MySqlService.importItemDimensions(parsed, { fillEmpty: true });
+        const mode = form.get("mode") === "replace" ? "replace" : "fill";
+        const result = await MySqlService.importItemDimensions(parsed, { mode });
 
-        return NextResponse.json({
-            message: `Imported ${result.imported} item(s). Skipped ${result.skipped} unknown ID(s).`,
-            ...result,
-        });
+        const parts = [`Updated ${result.imported} item(s).`];
+        if (mode === "replace") parts.push(`${result.replacedItems} had saved values replaced.`);
+        if (result.unchanged) {
+            parts.push(mode === "replace"
+                ? `${result.unchanged} already matched the file.`
+                : `${result.unchanged} already had values and were kept.`);
+        }
+        if (result.skipped) parts.push(`Skipped ${result.skipped} unknown ID(s).`);
+
+        return NextResponse.json({ message: parts.join(" "), ...result });
     } catch (err) {
         console.error("[Dimensions Import]", err);
         return NextResponse.json({ message: err.message }, { status: 500 });

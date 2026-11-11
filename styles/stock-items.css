@@ -1288,3 +1288,44 @@
     text-align: center;
     color: var(--text-muted);
 }
+/* Import mode choice */
+.si-import-mode {
+    margin: 0 0 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    display: grid;
+    gap: 0.4rem;
+}
+
+.si-import-mode legend {
+    padding: 0 0.3rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.si-import-mode label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.si-import-mode input {
+    margin-top: 0.15rem;
+    accent-color: var(--accent-primary);
+}
+
+.si-import-mode p {
+    margin: 0 !important;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+}
+
+.si-btn-ghost.si-btn-replace {
+    border-color: var(--status-warning);
+    color: var(--status-warning);
+}

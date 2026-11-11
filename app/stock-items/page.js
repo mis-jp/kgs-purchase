@@ -74,6 +74,7 @@ export default function StockItemsPage() {
     const [importStatus, setImportStatus] = useState("");
     const [importError, setImportError] = useState(false);
     const [showImportInfo, setShowImportInfo] = useState(false);
+    const [importMode, setImportMode] = useState("fill");
     const [companyLabel, setCompanyLabel] = useState("Main Company");
     const fileInputRef = useRef(null);
     const importInfoRef = useRef(null);
@@ -147,6 +148,7 @@ export default function StockItemsPage() {
 
             const form = new FormData();
             form.append("file", file);
+            form.append("mode", importMode);
             setImportProgress(50);
             setImportStatus("Importing dimensions…");
 
@@ -171,6 +173,7 @@ export default function StockItemsPage() {
                 setImportStatus("Import failed");
             }
         } finally {
+            setImportMode("fill");
             setTimeout(() => {
                 setImporting(false);
                 setImportProgress(0);
@@ -178,6 +181,19 @@ export default function StockItemsPage() {
             }, 1200);
             e.target.value = "";
         }
+    };
+
+    const handleImportClick = () => {
+        if (
+            importMode === "replace" &&
+            !window.confirm(
+                "Replace mode: sizes and weights in your file will replace the values already saved for those items. " +
+                "Blank cells keep the saved value. Continue?"
+            )
+        ) {
+            return;
+        }
+        fileInputRef.current?.click();
     };
 
     useEffect(() => {
@@ -486,11 +502,16 @@ export default function StockItemsPage() {
                         <div className="si-import-group" ref={importInfoRef}>
                             <button
                                 type="button"
-                                className="si-btn si-btn-ghost"
-                                onClick={() => fileInputRef.current?.click()}
+                                className={`si-btn si-btn-ghost${importMode === "replace" ? " si-btn-replace" : ""}`}
+                                onClick={handleImportClick}
                                 disabled={importing}
+                                title={importMode === "replace"
+                                    ? "File values will replace saved sizes and weights"
+                                    : "Only empty sizes and weights are filled in"}
                             >
-                                {importing ? "Importing…" : "Import dimensions"}
+                                {importing
+                                    ? "Importing…"
+                                    : importMode === "replace" ? "Import & replace" : "Import dimensions"}
                             </button>
                             <button
                                 type="button"
@@ -543,8 +564,32 @@ export default function StockItemsPage() {
                                         </div>
                                         <p className="si-import-example-caption">Sample only. Replace the Inventory ID and numbers with your items.</p>
                                     </div>
+                                    <fieldset className="si-import-mode">
+                                        <legend>When an item already has a saved value</legend>
+                                        <label>
+                                            <input
+                                                type="radio"
+                                                name="si-import-mode"
+                                                value="fill"
+                                                checked={importMode === "fill"}
+                                                onChange={() => setImportMode("fill")}
+                                            />
+                                            <span><strong>Keep the saved value</strong> — only empty fields are filled in.</span>
+                                        </label>
+                                        <label>
+                                            <input
+                                                type="radio"
+                                                name="si-import-mode"
+                                                value="replace"
+                                                checked={importMode === "replace"}
+                                                onChange={() => setImportMode("replace")}
+                                            />
+                                            <span><strong>Replace with the file value</strong> — use this to correct wrong sizes. Blank cells still keep the saved value.</span>
+                                        </label>
+                                        <p>Replace applies to the next upload only, then switches back to keep.</p>
+                                    </fieldset>
                                     <p className="si-import-info-note">
-                                        Inventory ID must match an existing stock item. The other columns are numbers and can be left blank. Unknown IDs are skipped. A value already saved is kept — only empty fields are filled. KG is the weight of one unit. The Weight column multiplies that by the quantity on hand.
+                                        Inventory ID must match an existing stock item. The other columns are numbers and can be left blank. Unknown IDs are skipped. A blank cell never erases a saved value. KG is the weight of one unit. The Weight column multiplies that by the quantity on hand.
                                     </p>
                                 </div>
                             )}

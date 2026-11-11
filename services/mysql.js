@@ -1,5 +1,12 @@
 import mysql from "mysql2/promise";
-import { mergeDimensionsFillEmpty, hasAnyDimensionValue, calcTotalCbm } from "@/lib/item-dimensions.js";
+import {
+    mergeDimensionsFillEmpty,
+    mergeDimensionsReplace,
+    changedDimensionFields,
+    isEmptyDimValue,
+    hasAnyDimensionValue,
+    calcTotalCbm,
+} from "@/lib/item-dimensions.js";
 import { inventoryDistinctCountSql } from "@/lib/inventory-sql.js";
 import {
     sqlExcludeEcomBranches,
@@ -5686,10 +5693,13 @@ export const MySqlService = {
         return !!row;
     },
 
-    async importItemDimensions(rows, { fillEmpty = true } = {}) {
+    async importItemDimensions(rows, { mode = "fill" } = {}) {
         await this.ensureItemDimensionsTable();
+        const replace = mode === "replace";
         let imported = 0;
         let skipped = 0;
+        let unchanged = 0;
+        let replacedItems = 0;
         const skippedIds = [];
 
         for (const row of rows) {
@@ -5704,19 +5714,24 @@ export const MySqlService = {
                 continue;
             }
 
-            if (fillEmpty) {
-                const existing = await this.getItemDimensions(id);
-                const merged = mergeDimensionsFillEmpty(existing, { ...row, inventory_id: id });
-                await this.upsertItemDimensions(id, merged, { skipInvalidate: true });
-            } else {
-                await this.upsertItemDimensions(id, row, { skipInvalidate: true });
+            const existing = await this.getItemDimensions(id);
+            const incoming = { ...row, inventory_id: id };
+            const merged = replace
+                ? mergeDimensionsReplace(existing, incoming)
+                : mergeDimensionsFillEmpty(existing, incoming);
+            const changed = changedDimensionFields(existing, merged);
+            if (!changed.length) {
+                unchanged++;
+                continue;
             }
+            if (changed.some((key) => !isEmptyDimValue(existing?.[key]))) replacedItems++;
+            await this.upsertItemDimensions(id, merged, { skipInvalidate: true });
             imported++;
         }
 
         // One invalidation for the whole import, after every row is written.
         if (imported > 0) invalidateFor("item-dimensions.changed");
-        return { imported, skipped, skippedIds };
+        return { imported, skipped, skippedIds, unchanged, replacedItems, mode: replace ? "replace" : "fill" };
     },
 
     /**
