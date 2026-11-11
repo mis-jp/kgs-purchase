@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
 import { fetchWithAuth } from "@/lib/api-client";
 import PaginationBar from "@/components/PaginationBar";
 import LeadTimeReport from "@/components/suppliers/LeadTimeReport";
+import { QUICK_SEARCH_EVENT } from "@/lib/quick-search";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/inventory-detail.css";
@@ -168,7 +169,8 @@ export default function SuppliersPage() {
     useEffect(() => {
         const savedPage = localStorage.getItem("supplier_filter_page");
         const initialPage = savedPage ? parseInt(savedPage) : 1;
-        const savedSearch = localStorage.getItem("supplier_filter_search") || "";
+        const urlSearch = new URLSearchParams(window.location.search).get("search");
+        const savedSearch = urlSearch || localStorage.getItem("supplier_filter_search") || "";
 
         Promise.resolve().then(async () => {
             // 1. Load filters
@@ -237,6 +239,14 @@ export default function SuppliersPage() {
         const t = setTimeout(() => setDebouncedSearch(search), 150);
         return () => clearTimeout(t);
     }, [search]);
+
+    useEffect(() => {
+        const onQuickSearch = (e) => {
+            if (e.detail?.path === "/suppliers") setSearch(e.detail.search || "");
+        };
+        window.addEventListener(QUICK_SEARCH_EVENT, onQuickSearch);
+        return () => window.removeEventListener(QUICK_SEARCH_EVENT, onQuickSearch);
+    }, []);
 
     useEffect(() => {
         Promise.resolve().then(() => setPage(1));

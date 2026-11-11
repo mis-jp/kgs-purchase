@@ -557,3 +557,55 @@
     overflow-wrap: anywhere;
 }
 
+
+/* Access review */
+
+.access-review-stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1.1rem;
+    margin: 0.5rem 0 0.9rem;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.access-review-stats strong {
+    color: var(--text-primary);
+}
+
+.access-review-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: auto;
+}
+
+.access-review-sub {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.access-review-branches {
+    max-width: 220px;
+    word-break: break-word;
+}
+
+.access-review-flag {
+    display: block;
+    margin: 0.1rem 0;
+    font-size: 0.78rem;
+    color: var(--status-warning);
+}
+
+.access-review-flag.is-deactivated {
+    color: var(--text-muted);
+}
+
+.access-review-flag.is-broad {
+    color: var(--text-secondary);
+}
+
+.access-review-inactive td {
+    opacity: 0.7;
+}

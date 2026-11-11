@@ -9,12 +9,28 @@ import { useTheme } from "./ThemeProvider";
 import SessionStatus from "./SessionStatus";
 import AutoSyncIndicator from "./AutoSyncIndicator";
 import SyncAlertBadge from "./SyncAlertBadge";
+import QuickSearch from "./QuickSearch";
 import TourGuide from "./TourGuide";
 import { withBasePath } from "@/lib/base-path";
 import { APP_VERSION } from "@/lib/app-version";
 import { storeAllowedModules } from "@/lib/user-access-client";
 import { FORECAST_MODULE, userCanAccessModule } from "@/lib/module-access";
 import "@/styles/sidebar.css";
+
+const PAGE_KEYWORDS = {
+  "/dashboard": "stock on hand warehouse branch dashboard",
+  "/stock-items": "items products sizes dimensions weight cbm missing",
+  "/purchase-orders": "po orders overdue etd container",
+  "/incoming-po": "arriving shipments eta",
+  "/suppliers": "vendors lead time reliability",
+  "/replenishment": "reorder order qty restock transfer",
+  "/packing-list": "container freight trucking cbm",
+  "/forecast-generator": "forecast demand plan",
+  "/sales": "sales invoices history",
+  "/syncing": "sync acumatica refresh import",
+  "/admin": "users access sync health settings",
+};
+
 /* ── SVG Icons ─────────────────────────────────────────── */
 const IconInventory = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -251,6 +267,10 @@ export default function Sidebar() {
       ? [{ name: "Admin", href: "/admin", icon: <IconAdmin />, moduleId: "admin" }]
       : []),
   ].filter((item) => userRole === "admin" || userCanAccessModule(accessUser, item.moduleId));
+  const searchPages = [
+    ...navItems.map((item) => ({ name: item.name, href: item.href, keywords: PAGE_KEYWORDS[item.href] || "" })),
+    { name: "Account", href: "/account", keywords: "profile password settings" },
+  ];
 
   return (
     <>
@@ -325,6 +345,8 @@ export default function Sidebar() {
           <div className="sidebar-session-wrap">
             <SessionStatus collapsed={isCollapsed} userName={userName} isAdmin={userRole === "admin"} />
           </div>
+
+          {mounted && <QuickSearch pages={searchPages} collapsed={isCollapsed} />}
         </div>
 
         <nav className="sidebar-nav">

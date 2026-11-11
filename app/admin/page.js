@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchWithAuth } from "@/lib/api-client";
 import SyncHealthPanel from "@/components/admin/SyncHealthPanel";
+import AccessReviewPanel from "@/components/admin/AccessReviewPanel";
 import "@/styles/admin.css";
 
 const EMPTY_FORM = {
@@ -324,6 +325,8 @@ export default function AdminPage() {
             {notice && <div className="admin-alert admin-alert--ok" role="status">{notice}</div>}
 
             <SyncHealthPanel />
+
+            <AccessReviewPanel onChanged={load} />
 
             <section className="admin-card">
                 <h2>Replenishment sales window</h2>

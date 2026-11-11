@@ -5,6 +5,7 @@ import { fetchWithAuth } from "@/lib/api-client";
 import { withBasePath } from "@/lib/base-path";
 import { DIMENSION_FIELDS, calcPieceWeightKg, calcStockWeightKg, formatWeightKg } from "@/lib/item-dimensions";
 import { missingDimensionsSheetRows } from "@/lib/missing-dimensions";
+import { QUICK_SEARCH_EVENT } from "@/lib/quick-search";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
 import MissingSizesReport from "@/components/stock-items/MissingSizesReport";
@@ -215,6 +216,16 @@ export default function StockItemsPage() {
         const t = setTimeout(() => setDebouncedSearch(search), 300);
         return () => clearTimeout(t);
     }, [search]);
+
+    useEffect(() => {
+        const fromUrl = new URLSearchParams(window.location.search).get("search");
+        if (fromUrl) Promise.resolve().then(() => setSearch(fromUrl));
+        const onQuickSearch = (e) => {
+            if (e.detail?.path === "/stock-items") setSearch(e.detail.search || "");
+        };
+        window.addEventListener(QUICK_SEARCH_EVENT, onQuickSearch);
+        return () => window.removeEventListener(QUICK_SEARCH_EVENT, onQuickSearch);
+    }, []);
 
     useEffect(() => {
         Promise.resolve().then(() => setPage(1));

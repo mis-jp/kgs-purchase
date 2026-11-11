@@ -352,10 +352,16 @@ export default function DashboardPage() {
     const [exporting, setExporting] = useState(false);
     const [companyLabel, setCompanyLabel] = useState("KGSC");
     const [filtersReady, setFiltersReady] = useState(false);
+    const [branchesReady, setBranchesReady] = useState(false);
 
     const searchTimer = useRef(null);
     const statsAbortRef = useRef(null);
     const tableAbortRef = useRef(null);
+    const appliedSearchRef = useRef("");
+    const selectedBranchRef = useRef("");
+    useEffect(() => {
+        selectedBranchRef.current = selectedBranch;
+    }, [selectedBranch]);
     useEffect(() => {
         Promise.resolve().then(() => {
             const b = localStorage.getItem("db_filter_branch") || "";
@@ -363,8 +369,15 @@ export default function DashboardPage() {
             const p = parseInt(localStorage.getItem("db_filter_page") || "1");
             const u = localStorage.getItem("userName") || "User";
 
-            if (b) setSelectedBranch(b);
-            if (s) setSearch(s);
+            if (b) {
+                selectedBranchRef.current = b;
+                setSelectedBranch(b);
+            }
+            if (s) {
+                appliedSearchRef.current = s;
+                setSearch(s);
+                setDebouncedSearch(s);
+            }
             if (p > 1) setPage(p);
             if (u !== "User") setUserName(u);
             setFiltersReady(true);
@@ -428,7 +441,10 @@ export default function DashboardPage() {
     useEffect(() => {
         const fetchBranches = async () => {
             try {
-                const res = await fetchWithAuth("/api/branches");
+                const [res, allowAll] = await Promise.all([
+                    fetchWithAuth("/api/branches"),
+                    loadAllBranchesAccess(fetchWithAuth),
+                ]);
                 if (res.ok) {
                     const data = await res.json();
                     const list = Array.isArray(data) ? data : (data?.value || []);
@@ -442,10 +458,10 @@ export default function DashboardPage() {
                         .filter((b, i, arr) => arr.findIndex(x => x.id === b.id) === i)
                         .sort((a, z) => a.name.localeCompare(z.name));
                     setBranchOptions(options);
-                    const allowAll = await loadAllBranchesAccess(fetchWithAuth);
                     setAllowAllBranches(allowAll);
 
-                    if (!selectedBranch || !options.some((b) => b.id === selectedBranch)) {
+                    const current = selectedBranchRef.current;
+                    if (!current || !options.some((b) => b.id === current)) {
                         if (!allowAll) {
                             if (options[0]) setSelectedBranch(options[0].id);
                         } else {
@@ -455,6 +471,7 @@ export default function DashboardPage() {
                     }
                 }
             } catch (err) { console.error("Branch fetch error", err); }
+            setBranchesReady(true);
         };
         fetchBranches();
 
@@ -559,21 +576,25 @@ export default function DashboardPage() {
     useEffect(() => {
         clearTimeout(searchTimer.current);
         searchTimer.current = setTimeout(() => {
+            if (appliedSearchRef.current === search) return;
+            appliedSearchRef.current = search;
             setDebouncedSearch(search);
             setPage(1);
         }, 300);
         return () => clearTimeout(searchTimer.current);
     }, [search]);
 
-    useEffect(() => {
-        if (!filtersReady) return;
-        fetchInventoryTable();
-    }, [filtersReady, page, debouncedSearch, selectedBranch, fetchInventoryTable]);
+    const dataReady = filtersReady && branchesReady;
 
     useEffect(() => {
-        if (!filtersReady) return;
+        if (!dataReady) return;
+        fetchInventoryTable();
+    }, [dataReady, page, debouncedSearch, selectedBranch, fetchInventoryTable]);
+
+    useEffect(() => {
+        if (!dataReady) return;
         fetchInventoryStats();
-    }, [filtersReady, debouncedSearch, selectedBranch, fetchInventoryStats]);
+    }, [dataReady, debouncedSearch, selectedBranch, fetchInventoryStats]);
 
     const isStale = globalStats.lastSync && (new Date() - new Date(globalStats.lastSync)) > 86400000;
 
