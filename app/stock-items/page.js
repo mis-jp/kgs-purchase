@@ -7,6 +7,7 @@ import { DIMENSION_FIELDS, calcPieceWeightKg, calcStockWeightKg, formatWeightKg 
 import { missingDimensionsSheetRows } from "@/lib/missing-dimensions";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
+import MissingSizesReport from "@/components/stock-items/MissingSizesReport";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
@@ -66,6 +67,7 @@ export default function StockItemsPage() {
     const [exporting, setExporting] = useState(false);
     const [importing, setImporting] = useState(false);
     const [downloadingMissing, setDownloadingMissing] = useState(false);
+    const [showMissingReport, setShowMissingReport] = useState(false);
     const [importMsg, setImportMsg] = useState(null);
     const [importProgress, setImportProgress] = useState(0);
     const [importStatus, setImportStatus] = useState("");
@@ -101,7 +103,7 @@ export default function StockItemsPage() {
             }
             const XLSX = await import("xlsx");
             const sheet = XLSX.utils.aoa_to_sheet(missingDimensionsSheetRows(items));
-            sheet["!cols"] = [18, 9, 13, 13, 13, 8, 10, 44, 12, 9, 16].map((wch) => ({ wch }));
+            sheet["!cols"] = [18, 9, 13, 13, 13, 8, 10, 44, 12, 9, 16, 40].map((wch) => ({ wch }));
             const book = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(book, sheet, "Data");
             const now = new Date();
@@ -540,11 +542,11 @@ export default function StockItemsPage() {
                         <button
                             type="button"
                             className="si-btn si-btn-ghost"
-                            onClick={handleDownloadMissingSizes}
-                            disabled={downloadingMissing || importing}
-                            title="Download items on open purchase orders that have no size or weight, ready to fill in and import"
+                            onClick={() => setShowMissingReport((v) => !v)}
+                            aria-expanded={showMissingReport}
+                            title="Items on open purchase orders that have no size or weight"
                         >
-                            {downloadingMissing ? "Preparing…" : "Missing sizes on open POs"}
+                            {showMissingReport ? "Hide missing sizes" : "Missing sizes on open POs"}
                         </button>
 
                         <button
@@ -598,6 +600,13 @@ export default function StockItemsPage() {
                     <div className={`si-import-msg ${importError ? "si-import-msg-error" : ""}`}>
                         {importMsg}
                     </div>
+                )}
+
+                {showMissingReport && (
+                    <MissingSizesReport
+                        onDownloadTemplate={handleDownloadMissingSizes}
+                        downloading={downloadingMissing}
+                    />
                 )}
 
                 {error && <div className="si-error">{error}</div>}

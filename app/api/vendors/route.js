@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session-store";
 import { AcumaticaService } from "@/services/acumatica";
 import { MySqlService } from "@/services/mysql";
+import { summarizeSupplierLeadTimes } from "@/lib/supplier-lead-times";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,19 @@ export async function GET(request) {
         const pageSize = Math.min(100, parseInt(searchParams.get("pageSize") || "10"));
         const search = (searchParams.get("search") || "").trim();
         const source = searchParams.get("source") || "mysql";
+
+        if (searchParams.get("view") === "lead-times") {
+            try {
+                const { delivered, open } = await MySqlService.getSupplierLeadTimeData();
+                return NextResponse.json({
+                    generatedAt: new Date().toISOString(),
+                    suppliers: summarizeSupplierLeadTimes(delivered, open),
+                }, NO_STORE);
+            } catch (err) {
+                console.error("[Vendors lead-times]", err?.message || err);
+                return NextResponse.json({ message: "Could not build the lead-time report. Please try again." }, { status: 500 });
+            }
+        }
 
         if (source === "mysql") {
             try {

@@ -592,11 +592,11 @@ export const MySqlService = {
      * Fetch purchase orders from MySQL (for Purchase Orders module).
      * No TTL cache — lists must stay live after sync / receipt updates.
      */
-    async getPurchaseOrders({ page = 1, pageSize = 50, search = "", orderNbr = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true } = {}) {
-        return this._getPurchaseOrdersImpl({ page, pageSize, search, orderNbr, status, startDate, endDate, branch, vendorId, companyId, orderNbrs, excludeZeroQty });
+    async getPurchaseOrders({ page = 1, pageSize = 50, search = "", orderNbr = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true, overdueDays = null } = {}) {
+        return this._getPurchaseOrdersImpl({ page, pageSize, search, orderNbr, status, startDate, endDate, branch, vendorId, companyId, orderNbrs, excludeZeroQty, overdueDays });
     },
 
-    async _getPurchaseOrdersImpl({ page = 1, pageSize = 50, search = "", orderNbr = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true } = {}) {
+    async _getPurchaseOrdersImpl({ page = 1, pageSize = 50, search = "", orderNbr = "", status = "", startDate = "", endDate = "", branch = "", vendorId = "", companyId = "main", orderNbrs = null, excludeZeroQty = true, overdueDays = null } = {}) {
         const offset = (page - 1) * pageSize;
         const limitInt = parseInt(pageSize, 10);
         const offsetInt = parseInt(offset, 10);
@@ -632,6 +632,14 @@ export const MySqlService = {
                     whereClauses.push(`h.status IN (${parts.map(() => "?").join(",")})`);
                     params.push(...parts);
                 }
+            }
+
+            if (overdueDays != null && Number.isFinite(Number(overdueDays))) {
+                // Still open (or on hold) and the Acumatica Promised On date has passed by more than N days
+                whereClauses.push(`h.status IN ('Open', 'On Hold', 'Hold')
+                    AND h.promised_date IS NOT NULL
+                    AND DATE(h.promised_date) < DATE_SUB(CURDATE(), INTERVAL ? DAY)`);
+                params.push(Math.max(0, Math.floor(Number(overdueDays))));
             }
 
             if (startDate) {
@@ -1679,6 +1687,47 @@ export const MySqlService = {
             console.error("[MySQL getOpenPoQtyForItems Error]", err);
             return new Map();
         }
+    },
+
+    /**
+     * Raw inputs for the supplier lead-time report: one row per delivered PO in the last
+     * 12 months (lead and late days), plus open / overdue counts per supplier. Read-only.
+     */
+    async getSupplierLeadTimeData() {
+        return getCached("supplierLeadTimeData", 5 * 60_000, async () => {
+            const [[delivered], [open]] = await Promise.all([
+                purchasePool.query(`
+                    SELECT
+                        h.vendor_id AS vendorId,
+                        COALESCE(NULLIF(TRIM(h.vendor_name), ''), v.vendor_name, h.vendor_id) AS vendorName,
+                        DATEDIFF(h.receipt_date, h.order_date) AS leadDays,
+                        CASE WHEN h.promised_date IS NULL THEN NULL
+                             ELSE DATEDIFF(h.receipt_date, h.promised_date) END AS lateDays,
+                        DATE_FORMAT(h.receipt_date, '%Y-%m-%d') AS receivedOn
+                    FROM purchase_history h
+                    LEFT JOIN vendors v ON v.vendor_id COLLATE utf8mb4_unicode_ci = h.vendor_id
+                    WHERE h.status IN ('Closed', 'Completed')
+                      AND h.vendor_id IS NOT NULL AND TRIM(h.vendor_id) != ''
+                      AND h.order_date IS NOT NULL
+                      AND h.receipt_date IS NOT NULL
+                      AND h.receipt_date >= h.order_date
+                      AND h.order_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+                `),
+                purchasePool.query(`
+                    SELECT
+                        h.vendor_id AS vendorId,
+                        MAX(COALESCE(NULLIF(TRIM(h.vendor_name), ''), v.vendor_name, h.vendor_id)) AS vendorName,
+                        COUNT(*) AS openCount,
+                        SUM(CASE WHEN h.promised_date IS NOT NULL AND DATE(h.promised_date) < CURDATE() THEN 1 ELSE 0 END) AS overdueCount
+                    FROM purchase_history h
+                    LEFT JOIN vendors v ON v.vendor_id COLLATE utf8mb4_unicode_ci = h.vendor_id
+                    WHERE h.status IN ('Open', 'On Hold', 'Hold')
+                      AND h.vendor_id IS NOT NULL AND TRIM(h.vendor_id) != ''
+                    GROUP BY h.vendor_id
+                `),
+            ]);
+            return { delivered, open };
+        });
     },
 
     /**
@@ -5487,7 +5536,9 @@ export const MySqlService = {
                 MAX(d.description) AS description,
                 COALESCE(SUM(${qtyExpr}), 0) AS openQty,
                 COUNT(DISTINCT h.order_nbr) AS poCount,
-                MAX(h.order_date) AS latestOrderDate
+                MAX(h.order_date) AS latestOrderDate,
+                SUBSTRING(GROUP_CONCAT(DISTINCT COALESCE(NULLIF(TRIM(h.vendor_name), ''), h.vendor_id)
+                    ORDER BY h.vendor_id SEPARATOR '||'), 1, 1000) AS suppliers
              FROM purchase_order_details d
              INNER JOIN purchase_history h
                 ON h.order_nbr COLLATE utf8mb4_unicode_ci = d.order_nbr
@@ -5520,6 +5571,7 @@ export const MySqlService = {
                 openQty: Number(r.openQty) || 0,
                 poCount: Number(r.poCount) || 0,
                 latestOrderDate: r.latestOrderDate || null,
+                suppliers: String(r.suppliers || "").split("||").map((s) => s.trim()).filter(Boolean),
                 missingSize,
                 missingWeight,
                 hasRecord: Boolean(dim),

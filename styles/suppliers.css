@@ -109,3 +109,127 @@
         grid-template-columns: 1fr 1fr;
     }
 }
+
+/* Lead time report */
+
+.sup-lt {
+    margin: 0 0 1.5rem;
+    padding: 1.1rem 1.25rem 1.25rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-light);
+    border-radius: 16px;
+}
+
+.sup-lt-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem 1.5rem;
+}
+
+.sup-lt-head h2 {
+    margin: 0 0 0.25rem;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+}
+
+.sup-lt-head p {
+    margin: 0;
+    max-width: 720px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.sup-lt-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.sup-lt-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem 1rem;
+    margin: 1rem 0 0.75rem;
+}
+
+.sup-lt-search {
+    max-width: 320px;
+    height: 38px;
+}
+
+.sup-lt-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.sup-lt-summary {
+    margin-left: auto;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.sup-lt-table-wrap {
+    max-height: 520px;
+    overflow: auto;
+}
+
+.sup-lt-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-elevated, var(--bg-surface));
+}
+
+.sup-lt-table .num {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.sup-lt-name {
+    display: block;
+    font-weight: 650;
+    color: var(--text-primary);
+}
+
+.sup-lt-id {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.sup-lt-trend {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+    border: 1px solid var(--border-light);
+    color: var(--text-secondary);
+}
+
+.sup-lt-trend.is-slower {
+    border-color: var(--status-danger);
+    color: var(--status-danger);
+}
+
+.sup-lt-trend.is-faster {
+    border-color: var(--status-success);
+    color: var(--status-success);
+}
+
+.sup-lt-overdue {
+    color: var(--status-danger);
+    font-weight: 750;
+}
+
+.sup-lt-empty {
+    padding: 2rem 0;
+    text-align: center;
+    color: var(--text-muted);
+}

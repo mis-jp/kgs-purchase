@@ -133,7 +133,18 @@ export async function GET(request) {
         const poCred = await resolvePoCredential(request);
         const companyId = getActiveCompanyFromRequest(request) || "main";
 
-        const fetchParams = { page, pageSize, search, orderNbr, startDate, endDate, status, branch, vendorId, companyId, orderNbrs };
+        const overdueParam = searchParams.get("overdueDays");
+        const overdueDays = overdueParam != null && /^\d{1,4}$/.test(overdueParam) ? Number(overdueParam) : null;
+        const fetchParams = { page, pageSize, search, orderNbr, startDate, endDate, status, branch, vendorId, companyId, orderNbrs, overdueDays };
+
+        if (searchParams.get("mode") === "overdue-summary") {
+            const count = async (days) => {
+                const r = await MySqlService.getPurchaseOrders({ page: 1, pageSize: 1, branch, overdueDays: days });
+                return Number(r.totalCount) || 0;
+            };
+            const [orderCount, over30Count] = await Promise.all([count(0), count(30)]);
+            return NextResponse.json({ orderCount, over30Count }, NO_STORE);
+        }
 
         if (source === "mysql") {
             try {

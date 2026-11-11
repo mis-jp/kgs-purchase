@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { isEtdBeyondContainer, isEtdBeyondOrderStatus, poDetailHref } from "@/lib/po-metrics";
 import { formatWeightKg } from "@/lib/item-dimensions";
+import { daysPastPromised } from "@/lib/po-overdue";
 import PoLinesTable from "@/components/PoLinesTable";
 import { loadAllBranchesAccess } from "@/lib/user-access-client";
 import { subscribeAutoSyncStatus } from "@/lib/auto-sync-status";
@@ -919,6 +920,47 @@ function ShipOutOverduePanel({ shipmentCount, orderCount, filtering, onToggleFil
     );
 }
 
+function PastPromisedPanel({ orderCount, over30Count, filtering, onToggleFilter }) {
+    const hasOverdue = orderCount > 0;
+    return (
+        <section
+            className={`po-shipout-overdue-panel po-past-promised-panel ${hasOverdue ? "is-alert" : ""} ${filtering ? "is-filtering" : ""}`}
+            aria-labelledby="po-past-promised-title"
+        >
+            <div className="po-shipout-overdue-head">
+                <div className="po-shipout-overdue-icon" aria-hidden="true">
+                    <IconAlert />
+                </div>
+                <div>
+                    <h2 id="po-past-promised-title">Past Promised Date</h2>
+                    <p>Still open after the supplier&apos;s Promised On date.</p>
+                </div>
+            </div>
+            <div className="po-shipout-overdue-stats">
+                <div className="po-shipout-overdue-stat">
+                    <span className="po-shipout-overdue-value">{orderCount}</span>
+                    <span className="po-shipout-overdue-label">Orders overdue</span>
+                </div>
+                <div className="po-shipout-overdue-stat">
+                    <span className="po-shipout-overdue-value">{over30Count}</span>
+                    <span className="po-shipout-overdue-label">Over 30 days late</span>
+                </div>
+            </div>
+            <p className="po-shipout-overdue-hint">
+                Counts Open and On Hold orders, any order date. Follow up with the supplier or update the promised date in Acumatica.
+            </p>
+            <button
+                type="button"
+                className={`po-status-filter-table-btn ${filtering ? "active" : ""}`}
+                onClick={onToggleFilter}
+                disabled={!hasOverdue && !filtering}
+            >
+                {filtering ? "Clear overdue filter" : "Show overdue in table"}
+            </button>
+        </section>
+    );
+}
+
 function EtdBeyondContainerPanel({ containerCount, orderCount, filtering, onToggleFilter }) {
     const hasBeyond = containerCount > 0;
     return (
@@ -984,6 +1026,8 @@ export default function PurchaseOrdersPage() {
     const [userStatusTableFilter, setUserStatusTableFilter] = useState("");
     const [overdueShipOutFilter, setOverdueShipOutFilter] = useState(false);
     const [etdBeyondFilter, setEtdBeyondFilter] = useState(false);
+    const [pastPromisedFilter, setPastPromisedFilter] = useState(false);
+    const [pastPromised, setPastPromised] = useState({ orderCount: 0, over30Count: 0 });
     const [etdByOrder, setEtdByOrder] = useState({});
     const [receiptByOrder, setReceiptByOrder] = useState({});
     const [statusByOrder, setStatusByOrder] = useState({});
@@ -1244,6 +1288,7 @@ export default function PurchaseOrdersPage() {
         columnFilters.userStatus,
         overdueShipOutFilter,
         etdBeyondFilter,
+        pastPromisedFilter,
         debColumnFilters.orderNbr,
         debColumnFilters.vendorId,
         debColumnFilters.vendorName,
@@ -1368,7 +1413,7 @@ export default function PurchaseOrdersPage() {
             });
 
             // PO Date column filter narrows the range; otherwise use toolbar From/To
-            if (!overdueShipOutFilter && !etdBeyondFilter) {
+            if (!overdueShipOutFilter && !etdBeyondFilter && !pastPromisedFilter) {
                 if (col.date) {
                     params.set("startDate", col.date);
                     params.set("endDate", col.date);
@@ -1381,7 +1426,7 @@ export default function PurchaseOrdersPage() {
             // Column Status overrides toolbar Status when set.
             // A vendor-name search must still find that vendor when every matching
             // order is Closed. The Active toolbar would otherwise hide them.
-            if (!columnFilters.userStatus && !overdueShipOutFilter && !etdBeyondFilter) {
+            if (!columnFilters.userStatus && !overdueShipOutFilter && !etdBeyondFilter && !pastPromisedFilter) {
                 const typedVendor = String(col.vendorName || "").trim();
                 const toolbarText = String(debSearch || "").trim();
                 const toolbarIsOrder = /^[A-Za-z]{1,8}\d{4,}$/.test(toolbarText.replace(/\s+/g, ""));
@@ -1408,6 +1453,7 @@ export default function PurchaseOrdersPage() {
             if (vendorIdQ) params.set("vendorId", vendorIdQ);
 
             if (selectedBranch) params.set("branch", selectedBranch);
+            if (pastPromisedFilter) params.set("overdueDays", "0");
 
             let nbrs = null;
             if (columnFilters.userStatus && userStatusOrderNbrs?.length) {
@@ -1456,6 +1502,7 @@ export default function PurchaseOrdersPage() {
         overdueShipOut.orderNbrs,
         etdBeyondFilter,
         etdBeyond.orderNbrs,
+        pastPromisedFilter,
         debColumnFilters,
     ]);
 
@@ -1468,6 +1515,19 @@ export default function PurchaseOrdersPage() {
             active = false;
         };
     }, [fetchOrders]);
+
+    useEffect(() => {
+        const controller = new AbortController();
+        const sp = new URLSearchParams({ mode: "overdue-summary" });
+        if (selectedBranch) sp.set("branch", selectedBranch);
+        fetchWithAuth(`/api/po?${sp}`, { signal: controller.signal })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+                if (data) setPastPromised({ orderCount: data.orderCount || 0, over30Count: data.over30Count || 0 });
+            })
+            .catch(() => {});
+        return () => controller.abort();
+    }, [selectedBranch]);
 
     useEffect(() => {
         let wasRunning = false;
@@ -1578,7 +1638,7 @@ export default function PurchaseOrdersPage() {
             const col = debColumnFilters;
             const base = new URLSearchParams();
 
-            if (!overdueShipOutFilter && !etdBeyondFilter) {
+            if (!overdueShipOutFilter && !etdBeyondFilter && !pastPromisedFilter) {
                 if (col.date) {
                     base.set("startDate", col.date);
                     base.set("endDate", col.date);
@@ -1588,7 +1648,7 @@ export default function PurchaseOrdersPage() {
                 }
             }
 
-            if (!columnFilters.userStatus && !overdueShipOutFilter && !etdBeyondFilter) {
+            if (!columnFilters.userStatus && !overdueShipOutFilter && !etdBeyondFilter && !pastPromisedFilter) {
                 const typedVendor = String(col.vendorName || "").trim();
                 const toolbarText = String(debSearch || "").trim();
                 const toolbarIsOrder = /^[A-Za-z]{1,8}\d{4,}$/.test(toolbarText.replace(/\s+/g, ""));
@@ -1612,6 +1672,7 @@ export default function PurchaseOrdersPage() {
             const vendorIdQ = String(col.vendorId || "").trim();
             if (vendorIdQ) base.set("vendorId", vendorIdQ);
             if (selectedBranch) base.set("branch", selectedBranch);
+            if (pastPromisedFilter) base.set("overdueDays", "0");
 
             let nbrs = null;
             if (columnFilters.userStatus && userStatusOrderNbrs?.length) {
@@ -1713,6 +1774,7 @@ export default function PurchaseOrdersPage() {
         overdueShipOut.orderNbrs,
         etdBeyondFilter,
         etdBeyond.orderNbrs,
+        pastPromisedFilter,
         userInputs,
     ]);
 
@@ -1761,6 +1823,12 @@ export default function PurchaseOrdersPage() {
                         orderCount={etdBeyond.orderNbrs.length}
                         filtering={etdBeyondFilter}
                         onToggleFilter={() => setEtdBeyondFilter((v) => !v)}
+                    />
+                    <PastPromisedPanel
+                        orderCount={pastPromised.orderCount}
+                        over30Count={pastPromised.over30Count}
+                        filtering={pastPromisedFilter}
+                        onToggleFilter={() => setPastPromisedFilter((v) => !v)}
                     />
                     <ShipOutOverduePanel
                         shipmentCount={overdueShipOut.shipmentCount}
@@ -2094,7 +2162,9 @@ export default function PurchaseOrdersPage() {
                                 </td></tr>
                             ) : displayedOrders.length === 0 ? (
                                 <tr><td colSpan={17} className="si-empty-cell" style={{ padding: '4rem 0' }}>
-                                    {etdBeyondFilter && overdueShipOutFilter
+                                    {pastPromisedFilter
+                                        ? "No open purchase orders are past their promised date for the current filters."
+                                        : etdBeyondFilter && overdueShipOutFilter
                                         ? "No purchase orders match both dashboards."
                                         : etdBeyondFilter
                                         ? "No containers are past their ETD with an empty Received date."
@@ -2173,6 +2243,14 @@ export default function PurchaseOrdersPage() {
                                                 <span className="po-readonly-date" title={po.promisedDate ? "From Acumatica Promised On" : (ui.etd ? "Legacy annotation" : "")}>
                                                     {fmtDate(etdValue)}
                                                 </span>
+                                                {daysPastPromised(po) > 0 && (
+                                                    <span
+                                                        className={`po-late-badge ${daysPastPromised(po) > 30 ? "is-severe" : ""}`}
+                                                        title="Still open after the promised date"
+                                                    >
+                                                        {daysPastPromised(po)}d late
+                                                    </span>
+                                                )}
                                             </td>
                                             <td className="po-multi-entry-td" onClick={(e) => e.stopPropagation()}>
                                                 <PoMultiEntryCell

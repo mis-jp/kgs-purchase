@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
 import PaginationBar from "@/components/PaginationBar";
+import LeadTimeReport from "@/components/suppliers/LeadTimeReport";
 import "@/styles/dashboard.css";
 import "@/styles/stock-items.css";
 import "@/styles/inventory-detail.css";
@@ -151,6 +152,7 @@ export default function SuppliersPage() {
     const [ordersLoading, setOrdersLoading] = useState(false);
     const [ordersError, setOrdersError] = useState(null);
     const [expandedOrderNbr, setExpandedOrderNbr] = useState(null);
+    const [showLeadTimeReport, setShowLeadTimeReport] = useState(false);
 
     const isInitialMount = useRef(true);
     const saveTimeoutRef = useRef({});
@@ -364,7 +366,19 @@ export default function SuppliersPage() {
                             )}
                         </div>
                     </div>
+                    <div className="db-toolbar-right">
+                        <button
+                            type="button"
+                            className={`db-action-btn ${showLeadTimeReport ? "db-action-sync" : ""}`}
+                            onClick={() => setShowLeadTimeReport((v) => !v)}
+                            aria-expanded={showLeadTimeReport}
+                        >
+                            {showLeadTimeReport ? "Hide lead time report" : "Lead time report"}
+                        </button>
+                    </div>
                 </div>
+
+                {showLeadTimeReport && <LeadTimeReport />}
 
                 {error && <div className="si-error">{error}</div>}
 

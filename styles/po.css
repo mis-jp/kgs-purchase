@@ -28,7 +28,7 @@
 
 .po-page-title-row {
     display: grid;
-    grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr);
+    grid-template-columns: minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.15fr);
     align-items: start;
     gap: 1.25rem 1.5rem;
     container-type: inline-size;
@@ -307,6 +307,47 @@
 .po-status-clear-filter-btn:hover {
     color: var(--text-primary);
     border-color: var(--border-dark);
+}
+
+@container po-title (max-width: 1560px) {
+    .po-page-title-row {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .po-page-title-text {
+        grid-column: 1 / -1;
+    }
+}
+
+.po-late-badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--status-warning, #d97706);
+    color: var(--status-warning, #d97706);
+    font-size: 0.68rem;
+    font-weight: 750;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.po-late-badge.is-severe {
+    border-color: var(--status-danger, #e11d48);
+    color: var(--status-danger, #e11d48);
+}
+
+.po-past-promised-panel.is-alert {
+    border-color: rgba(217, 119, 6, 0.45);
+}
+
+.po-past-promised-panel .po-shipout-overdue-icon {
+    background: rgba(217, 119, 6, 0.12);
+    color: var(--status-warning, #d97706);
+}
+
+.po-past-promised-panel.is-alert .po-shipout-overdue-value {
+    color: var(--status-warning, #d97706);
 }
 
 @container po-title (max-width: 1180px) {
