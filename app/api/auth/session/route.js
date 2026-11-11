@@ -11,6 +11,7 @@ import {
 import { SESSION_EXPIRED_MESSAGE } from "@/lib/session-messages";
 import { MySqlService } from "@/services/mysql";
 import { sanitizeUserWithBranches } from "@/lib/app-users";
+import { canSeeSyncAlerts } from "@/lib/sync-alert-access";
 import { hydrateSessionFromDb, removePersistedAppSession } from "@/lib/persist-session";
 
 export const runtime = "nodejs";
@@ -39,6 +40,7 @@ function localUserPayload(localUser) {
         branchIds: role === "admin" ? [] : (Array.isArray(localUser.branchIds) ? localUser.branchIds : []),
         allBranches: role === "admin" || localUser.allBranches === true,
         allowedModules: role === "admin" ? [] : (Array.isArray(localUser.allowedModules) ? localUser.allowedModules : []),
+        syncAlerts: canSeeSyncAlerts({ ...localUser, role }),
     };
 }
 

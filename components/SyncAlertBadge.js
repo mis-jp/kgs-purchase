@@ -6,12 +6,12 @@ import { fetchWithAuth } from "@/lib/api-client";
 
 const POLL_MS = 5 * 60_000;
 
-/** Admin-only sidebar warning when a sync step or background job keeps failing, or data goes stale. */
-export default function SyncAlertBadge({ isAdmin, collapsed }) {
+/** Sidebar warning, for users allowed to see sync alerts, when a sync step or background job keeps failing, or data goes stale. */
+export default function SyncAlertBadge({ enabled, collapsed }) {
     const [alerts, setAlerts] = useState([]);
 
     useEffect(() => {
-        if (!isAdmin) return undefined;
+        if (!enabled) return undefined;
         let active = true;
         const check = () => {
             if (document.hidden) return;
@@ -30,9 +30,9 @@ export default function SyncAlertBadge({ isAdmin, collapsed }) {
             clearInterval(timer);
             document.removeEventListener("visibilitychange", check);
         };
-    }, [isAdmin]);
+    }, [enabled]);
 
-    if (!isAdmin || !alerts.length) return null;
+    if (!enabled || !alerts.length) return null;
 
     const label = alerts.length === 1 ? "1 sync problem" : `${alerts.length} sync problems`;
     return (

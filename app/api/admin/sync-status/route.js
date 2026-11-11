@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { MySqlService } from "@/services/mysql";
 import { getAcumaticaBusyUntil } from "@/services/acumatica";
 import { requireAdmin } from "@/lib/app-users";
+import { canSeeSyncAlerts } from "@/lib/sync-alert-access";
 import { getBackgroundJobStatus } from "@/lib/background-jobs";
 import { buildSyncAlerts, describeFreshness, summarizeSyncLogs } from "@/lib/sync-status";
 
@@ -12,10 +13,16 @@ const NO_STORE = { headers: { "Cache-Control": "no-store" } };
 const LOG_ROWS = 200;
 
 export async function GET(request) {
+    let admin;
     try {
-        await requireAdmin(request);
+        admin = await requireAdmin(request);
     } catch (err) {
         return NextResponse.json({ message: err.message || "Forbidden" }, { status: err.status || 403 });
+    }
+    const showAlerts = canSeeSyncAlerts(admin);
+    const alertsOnly = new URL(request.url).searchParams.get("view") === "alerts";
+    if (alertsOnly && !showAlerts) {
+        return NextResponse.json({ message: "Forbidden" }, { status: 403 });
     }
 
     try {
@@ -34,9 +41,9 @@ export async function GET(request) {
         ];
         const sections = summarizeSyncLogs(logs);
         const jobs = getBackgroundJobStatus();
-        const alerts = buildSyncAlerts({ sections, jobs: jobs.jobs, freshness });
+        const alerts = showAlerts ? buildSyncAlerts({ sections, jobs: jobs.jobs, freshness }) : [];
 
-        if (new URL(request.url).searchParams.get("view") === "alerts") {
+        if (alertsOnly) {
             return NextResponse.json({ generatedAt: new Date(now).toISOString(), alerts }, NO_STORE);
         }
 

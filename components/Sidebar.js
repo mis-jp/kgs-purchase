@@ -119,6 +119,7 @@ export default function Sidebar() {
   const [mounted, setMounted] = useState(false);
   const [userName, setUserName] = useState("Admin User");
   const [userRole, setUserRole] = useState("");
+  const [showSyncAlerts, setShowSyncAlerts] = useState(false);
   const [allowedModules, setAllowedModules] = useState([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -155,6 +156,7 @@ export default function Sidebar() {
           setUserName(name);
           localStorage.setItem("userName", name);
         }
+        setShowSyncAlerts(data.user.syncAlerts === true);
         if (data.user.role) {
           setUserRole(data.user.role);
           localStorage.setItem("userRole", data.user.role);
@@ -402,7 +404,7 @@ export default function Sidebar() {
           {!isCollapsed && <span>{isCollapsed ? "Expand" : "Collapse"}</span>}
         </button>
 
-        <SyncAlertBadge isAdmin={userRole === "admin"} collapsed={isCollapsed} />
+        <SyncAlertBadge enabled={showSyncAlerts} collapsed={isCollapsed} />
 
         <AutoSyncIndicator collapsed={isCollapsed} />
 
