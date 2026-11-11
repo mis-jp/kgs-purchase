@@ -819,9 +819,8 @@ export default function ReplenishmentPage() {
 
     const scopeLabel = isMain ? "MAIN Warehouse" : (selectedBranch || "Branch");
 
-    const exportCSV = useCallback(async () => {
-        if (!activeBranch) return;
-        try {
+    const buildExport = useCallback(async () => {
+        if (!activeBranch) return null;
             const qs = buildQueryString({
                 pageNum: 1,
                 searchText: debouncedSearch,
@@ -832,16 +831,16 @@ export default function ReplenishmentPage() {
             const res = await fetchWithAuth(
                 `/api/replenishment?branch=${encodeURIComponent(activeBranch)}${qs}`
             );
-            if (!res.ok) return;
+            if (!res.ok) throw new Error(`Export request failed (${res.status})`);
             const data = await res.json();
             const rows = data.recommendations || [];
-            if (!rows.length) return;
+            if (!rows.length) return null;
 
         const headers = isMain
             ? ["Status", "Product ID", "Description", "Item Class", "Main Inventory", "Coming PO", "Total Branch Replenishment", "Days Left", "Avg Lead Time", "Order Qty", "Order Qty with Lead Time", "What To Do"]
             : ["Status", "Product ID", "Description", "Item Class", "Branch Stock", "Coming PO", "Sells Per Day", "Days Left", "Avg Lead Time", "Order Qty", "Order Qty with Lead Time", "What To Do"];
 
-        const csvRows = rows.map((rec) => {
+        const dataRows = rows.map((rec) => {
             const ai = rec.aiInsights || {};
             const leadTime = Number(rec.leadTimeDays ?? ai.leadTimeDays) || 0;
             const orderQty = orderQtyDrafts[rec.itemId] !== undefined
@@ -873,20 +872,10 @@ export default function ReplenishmentPage() {
                 orderQtyWithLeadTime,
                 ai.whatToDo || rec.restockSource || ""
             );
-            return base.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",");
+            return base;
         });
 
-        const csv = [headers.join(","), ...csvRows].join("\n");
-        const blob = new Blob([csv], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `replenishment-${isMain ? "MAIN" : selectedBranch}-${new Date().toISOString().split("T")[0]}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
-        } catch (err) {
-            console.error("Export failed", err);
-        }
+        return { headers, rows: dataRows };
     }, [
         activeBranch,
         buildQueryString,
@@ -894,9 +883,77 @@ export default function ReplenishmentPage() {
         priorityFilter,
         itemClassFilter,
         isMain,
-        selectedBranch,
         orderQtyDrafts,
     ]);
+
+    const [exporting, setExporting] = useState("");
+    const exportFileBase = `replenishment-${isMain ? "MAIN" : selectedBranch}-${new Date().toISOString().split("T")[0]}`;
+
+    const exportCSV = useCallback(async () => {
+        setExporting("csv");
+        try {
+            const out = await buildExport();
+            if (!out) return;
+            const csv = [out.headers, ...out.rows]
+                .map((row) => row.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
+                .join("\n");
+            const blob = new Blob([csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${exportFileBase}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error("Export failed", err);
+        } finally {
+            setExporting("");
+        }
+    }, [buildExport, exportFileBase]);
+
+    const exportExcel = useCallback(async () => {
+        setExporting("xlsx");
+        try {
+            const out = await buildExport();
+            if (!out) return;
+            const XLSX = await import("xlsx");
+            const sheet = XLSX.utils.aoa_to_sheet([out.headers, ...out.rows]);
+            sheet["!cols"] = out.headers.map((h, i) => {
+                const longest = out.rows.reduce((m, r) => Math.max(m, String(r[i] ?? "").length), String(h).length);
+                return { wch: Math.min(60, Math.max(10, longest + 2)) };
+            });
+            sheet["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: out.rows.length, c: out.headers.length - 1 } }) };
+
+            const byStatus = new Map();
+            for (const row of out.rows) byStatus.set(row[0], (byStatus.get(row[0]) || 0) + 1);
+            const orderQtyCol = out.headers.indexOf("Order Qty");
+            const totalOrderQty = out.rows.reduce((s, r) => s + (Number(r[orderQtyCol]) || 0), 0);
+            const summary = XLSX.utils.aoa_to_sheet([
+                ["Replenishment export"],
+                ["Branch", isMain ? "MAIN Warehouse" : selectedBranch],
+                ["Generated", new Date()],
+                ["Search", debouncedSearch || "(none)"],
+                ["Priority filter", priorityFilter || "All"],
+                ["Item class filter", itemClassFilter || "All"],
+                [],
+                ["Items", out.rows.length],
+                ["Total order qty", totalOrderQty],
+                [],
+                ["Status", "Items"],
+                ...[...byStatus.entries()].sort((a, b) => b[1] - a[1]),
+            ], { cellDates: true });
+            summary["!cols"] = [{ wch: 22 }, { wch: 28 }];
+
+            const book = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(book, sheet, "Replenishment");
+            XLSX.utils.book_append_sheet(book, summary, "Summary");
+            XLSX.writeFile(book, `${exportFileBase}.xlsx`);
+        } catch (err) {
+            console.error("Export failed", err);
+        } finally {
+            setExporting("");
+        }
+    }, [buildExport, exportFileBase, isMain, selectedBranch, debouncedSearch, priorityFilter, itemClassFilter]);
 
     return (
         <div className="db-root">
@@ -1134,10 +1191,17 @@ export default function ReplenishmentPage() {
                     <div className="db-toolbar-right">
                         <button
                             className="db-action-btn"
-                            onClick={exportCSV}
-                            disabled={loading || totalCount === 0}
+                            onClick={exportExcel}
+                            disabled={loading || totalCount === 0 || Boolean(exporting)}
                         >
-                            <IconDownload /> Export CSV
+                            <IconDownload /> {exporting === "xlsx" ? "Exporting…" : "Export Excel"}
+                        </button>
+                        <button
+                            className="db-action-btn"
+                            onClick={exportCSV}
+                            disabled={loading || totalCount === 0 || Boolean(exporting)}
+                        >
+                            <IconDownload /> {exporting === "csv" ? "Exporting…" : "Export CSV"}
                         </button>
                         <button
                             className="db-refresh-btn"

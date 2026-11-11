@@ -3,7 +3,7 @@ import { MySqlService } from "@/services/mysql";
 import { getAcumaticaBusyUntil } from "@/services/acumatica";
 import { requireAdmin } from "@/lib/app-users";
 import { getBackgroundJobStatus } from "@/lib/background-jobs";
-import { describeFreshness, summarizeSyncLogs } from "@/lib/sync-status";
+import { buildSyncAlerts, describeFreshness, summarizeSyncLogs } from "@/lib/sync-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,16 +27,25 @@ export async function GET(request) {
         ]);
         const now = Date.now();
         const busyUntil = getAcumaticaBusyUntil();
+        const freshness = [
+            describeFreshness("inventory", "Inventory stock", inventory, now),
+            describeFreshness("sales", "Sales history", sales, now),
+            describeFreshness("purchaseOrders", "Purchase orders", purchaseOrders, now),
+        ];
+        const sections = summarizeSyncLogs(logs);
+        const jobs = getBackgroundJobStatus();
+        const alerts = buildSyncAlerts({ sections, jobs: jobs.jobs, freshness });
+
+        if (new URL(request.url).searchParams.get("view") === "alerts") {
+            return NextResponse.json({ generatedAt: new Date(now).toISOString(), alerts }, NO_STORE);
+        }
 
         return NextResponse.json({
             generatedAt: new Date(now).toISOString(),
-            freshness: [
-                describeFreshness("inventory", "Inventory stock", inventory, now),
-                describeFreshness("sales", "Sales history", sales, now),
-                describeFreshness("purchaseOrders", "Purchase orders", purchaseOrders, now),
-            ],
-            sections: summarizeSyncLogs(logs),
-            jobs: getBackgroundJobStatus(),
+            alerts,
+            freshness,
+            sections,
+            jobs,
             acumatica: {
                 busy: busyUntil > now,
                 busyUntil: busyUntil > now ? new Date(busyUntil).toISOString() : null,

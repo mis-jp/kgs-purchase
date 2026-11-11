@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
+import { containerFillSummary } from "@/lib/packing-list";
 
 async function readJson(res) {
     const data = await res.json().catch(() => ({}));
@@ -15,14 +16,30 @@ function formatWhen(iso) {
     return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+function fillLabel(snapshot) {
+    if (!snapshot) return "";
+    const fill = containerFillSummary(snapshot.cbm, snapshot.weightKg);
+    return fill ? `${fill.text}, ${fill.fillPct}% full` : "";
+}
+
+function fillClass(pct) {
+    if (pct >= 85) return "is-good";
+    if (pct >= 60) return "is-fair";
+    return "is-low";
+}
+
+const ACTION_LABELS = { created: "Saved", updated: "Changed", deleted: "Deleted" };
+
 /** Save the current packing list to the database, or open one a teammate saved. */
-export default function SavedPackingLists({ branch, selected, manual, truckingFee, onLoad }) {
+export default function SavedPackingLists({ branch, selected, manual, truckingFee, snapshot, onLoad }) {
     const [result, setResult] = useState({ branch: "", lists: [], error: "" });
     const [tick, setTick] = useState(0);
     const [activeId, setActiveId] = useState("");
     const [name, setName] = useState("");
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState({ type: "", text: "" });
+    const [detail, setDetail] = useState({ key: "", activity: [], canEdit: true, error: "" });
+    const [showHistory, setShowHistory] = useState(false);
 
     useEffect(() => {
         if (!branch) return undefined;
@@ -36,16 +53,33 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
         return () => controller.abort();
     }, [branch, tick]);
 
+    const detailKey = activeId ? `${activeId}#${tick}` : "";
+    useEffect(() => {
+        if (!activeId) return undefined;
+        const controller = new AbortController();
+        const key = `${activeId}#${tick}`;
+        fetchWithAuth(`/api/po/packing-list/saved/${encodeURIComponent(activeId)}`, { signal: controller.signal })
+            .then(readJson)
+            .then((data) => setDetail({ key, activity: data.activity || [], canEdit: data.canEdit !== false, error: "" }))
+            .catch((err) => {
+                if (!controller.signal.aborted) setDetail({ key, activity: [], canEdit: true, error: err.message });
+            });
+        return () => controller.abort();
+    }, [activeId, tick]);
+
     const lists = result.branch === branch ? result.lists : [];
     const active = lists.find((l) => String(l.id) === String(activeId)) || null;
+    const detailReady = detail.key === detailKey;
+    const canEdit = !detailReady || detail.canEdit;
+    const activeFill = active?.snapshot ? containerFillSummary(active.snapshot.cbm, active.snapshot.weightKg) : null;
 
-    const payload = useCallback(() => {
+    const payload = () => {
         const prefix = `${String(branch).toUpperCase()}|`;
         const manualQty = Object.fromEntries(
             Object.entries(manual || {}).filter(([k]) => k.toUpperCase().startsWith(prefix))
         );
-        return { name: name.trim() || active?.name || "", branch, orderNbrs: selected, manualQty, truckingFee };
-    }, [branch, manual, selected, truckingFee, name, active]);
+        return { name: name.trim() || active?.name || "", branch, orderNbrs: selected, manualQty, truckingFee, snapshot };
+    };
 
     const run = async (task, okText) => {
         setBusy(true);
@@ -88,12 +122,14 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
             await readJson(await fetchWithAuth(`/api/po/packing-list/saved/${active.id}`, { method: "DELETE" }));
             setActiveId("");
             setName("");
+            setShowHistory(false);
             setTick((n) => n + 1);
         }, "Packing list deleted.");
     };
 
     const open = (id) => {
         setActiveId(id);
+        setShowHistory(false);
         setMessage({ type: "", text: "" });
         const list = lists.find((l) => String(l.id) === String(id));
         if (!list) {
@@ -119,11 +155,14 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
                         aria-label="Open a saved packing list"
                     >
                         <option value="">{lists.length ? "Open a saved list…" : "No saved lists for this branch"}</option>
-                        {lists.map((l) => (
-                            <option key={l.id} value={l.id}>
-                                {l.name} · {l.orderNbrs.length} PO(s) · {l.updatedBy || l.createdBy || "—"} · {formatWhen(l.updatedAt)}
-                            </option>
-                        ))}
+                        {lists.map((l) => {
+                            const fill = fillLabel(l.snapshot);
+                            return (
+                                <option key={l.id} value={l.id}>
+                                    {l.name} · {l.orderNbrs.length} PO(s){fill ? ` · ${fill}` : ""} · {l.updatedBy || l.createdBy || "—"} · {formatWhen(l.updatedAt)}
+                                </option>
+                            );
+                        })}
                     </select>
                 </label>
                 <label className="pl-saved-field pl-saved-name">
@@ -139,7 +178,7 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
                     />
                 </label>
                 <div className="pl-saved-actions">
-                    {active && (
+                    {active && canEdit && (
                         <button type="button" className="db-action-btn" onClick={overwrite} disabled={busy || !selected.length}>
                             Save changes
                         </button>
@@ -154,12 +193,60 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
                         {active ? "Save as new" : "Save packing list"}
                     </button>
                     {active && (
+                        <button type="button" className="pl-link-btn" onClick={() => setShowHistory((v) => !v)}>
+                            {showHistory ? "Hide history" : "History"}
+                        </button>
+                    )}
+                    {active && canEdit && (
                         <button type="button" className="pl-link-btn pl-link-danger" onClick={remove} disabled={busy}>
                             Delete
                         </button>
                     )}
                 </div>
             </div>
+
+            {active && activeFill && (
+                <div className={`pl-saved-fill ${fillClass(activeFill.fillPct)}`}>
+                    <span>When last saved: {activeFill.text}</span>
+                    <span className="pl-saved-fill-bar" aria-hidden="true">
+                        <span style={{ width: `${Math.min(100, activeFill.fillPct)}%` }} />
+                    </span>
+                    <span>
+                        {activeFill.volumePct}% by volume, {activeFill.weightPct}% by weight
+                    </span>
+                </div>
+            )}
+            {active && !canEdit && (
+                <div className="pl-saved-msg">
+                    Saved by {active.createdBy || "another user"}. You can open it and use Save as new to keep your own copy.
+                </div>
+            )}
+
+            {active && showHistory && (
+                <div className="pl-saved-history" aria-label="Packing list history">
+                    {!detailReady && <div className="pl-saved-msg">Loading history…</div>}
+                    {detailReady && detail.error && <div className="pl-saved-msg is-error">{detail.error}</div>}
+                    {detailReady && !detail.error && !detail.activity.length && (
+                        <div className="pl-saved-msg">No history yet. Changes are recorded from now on.</div>
+                    )}
+                    {detailReady && detail.activity.length > 0 && (
+                        <ol className="pl-history-list">
+                            {detail.activity.map((a) => (
+                                <li key={a.id}>
+                                    <span className="pl-history-when">{formatWhen(a.at)}</span>
+                                    <span className="pl-history-who">{a.username || "Unknown user"}</span>
+                                    <span className="pl-history-what">
+                                        <strong>{ACTION_LABELS[a.action] || a.action}</strong>
+                                        {a.summary ? ` — ${a.summary}` : ""}
+                                        {a.cbm != null ? ` (${a.cbm.toLocaleString()} cbm, ${(a.weightKg || 0).toLocaleString()} kg)` : ""}
+                                    </span>
+                                </li>
+                            ))}
+                        </ol>
+                    )}
+                </div>
+            )}
+
             {result.error && result.branch === branch && <div className="pl-saved-msg is-error">{result.error}</div>}
             {message.text && <div className={`pl-saved-msg ${message.type === "error" ? "is-error" : "is-ok"}`}>{message.text}</div>}
         </div>

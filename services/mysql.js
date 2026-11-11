@@ -5373,6 +5373,95 @@ export const MySqlService = {
         return res.affectedRows > 0;
     },
 
+    async ensurePackingListActivityTable() {
+        if (MySqlService._packingListActivityReady) return;
+        await purchasePool.query(`
+            CREATE TABLE IF NOT EXISTS packing_list_activity (
+              id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              packing_list_id INT UNSIGNED NOT NULL,
+              list_name VARCHAR(150) NULL,
+              action VARCHAR(20) NOT NULL,
+              summary VARCHAR(255) NULL,
+              order_count INT UNSIGNED NULL,
+              total_cbm DECIMAL(14,4) NULL,
+              total_kg DECIMAL(16,2) NULL,
+              username VARCHAR(64) NULL,
+              created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (id),
+              KEY idx_packing_list_activity_list (packing_list_id, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+        MySqlService._packingListActivityReady = true;
+    },
+
+    /** History row for a saved packing list; the CBM / KG snapshot drives the container fill shown in the list. */
+    async addPackingListActivity({ packingListId, listName, action, summary, orderCount = null, snapshot = null, username = null }) {
+        await this.ensurePackingListActivityTable();
+        await purchasePool.query(
+            `INSERT INTO packing_list_activity
+               (packing_list_id, list_name, action, summary, order_count, total_cbm, total_kg, username)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                packingListId,
+                listName ? String(listName).slice(0, 150) : null,
+                String(action).slice(0, 20),
+                summary ? String(summary).slice(0, 255) : null,
+                orderCount,
+                snapshot ? snapshot.cbm : null,
+                snapshot ? snapshot.weightKg : null,
+                username,
+            ]
+        );
+    },
+
+    async listPackingListActivity(packingListId, limit = 50) {
+        await this.ensurePackingListActivityTable();
+        const [rows] = await purchasePool.query(
+            `SELECT id, action, summary, order_count, total_cbm, total_kg, username, created_at
+             FROM packing_list_activity
+             WHERE packing_list_id = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?`,
+            [packingListId, Math.min(200, Math.max(1, Number(limit) || 50))]
+        );
+        return rows.map((r) => ({
+            id: Number(r.id),
+            action: r.action,
+            summary: r.summary || "",
+            orderCount: r.order_count == null ? null : Number(r.order_count),
+            cbm: r.total_cbm == null ? null : Number(r.total_cbm),
+            weightKg: r.total_kg == null ? null : Number(r.total_kg),
+            username: r.username || null,
+            at: r.created_at ? new Date(r.created_at).toISOString() : null,
+        }));
+    },
+
+    /** Latest measured CBM / KG for each saved list id: { [id]: { cbm, weightKg, at } }. */
+    async latestPackingListSnapshots(ids) {
+        const clean = [...new Set((ids || []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+        if (!clean.length) return {};
+        await this.ensurePackingListActivityTable();
+        const [rows] = await purchasePool.query(
+            `SELECT a.packing_list_id, a.total_cbm, a.total_kg, a.created_at
+             FROM packing_list_activity a
+             JOIN (
+               SELECT packing_list_id, MAX(id) AS max_id
+               FROM packing_list_activity
+               WHERE packing_list_id IN (${clean.map(() => "?").join(", ")}) AND total_cbm IS NOT NULL
+               GROUP BY packing_list_id
+             ) latest ON latest.max_id = a.id`,
+            clean
+        );
+        return Object.fromEntries(rows.map((r) => [
+            Number(r.packing_list_id),
+            {
+                cbm: Number(r.total_cbm),
+                weightKg: r.total_kg == null ? 0 : Number(r.total_kg),
+                at: r.created_at ? new Date(r.created_at).toISOString() : null,
+            },
+        ]));
+    },
+
     /**
      * Items on open purchase orders whose size or weight is missing, so packing-list
      * CBM / weight would leave them out. Read-only; one branch or all branches.

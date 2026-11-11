@@ -8,6 +8,7 @@ import { fetchWithAuth } from "@/lib/api-client";
 import { useTheme } from "./ThemeProvider";
 import SessionStatus from "./SessionStatus";
 import AutoSyncIndicator from "./AutoSyncIndicator";
+import SyncAlertBadge from "./SyncAlertBadge";
 import TourGuide from "./TourGuide";
 import { withBasePath } from "@/lib/base-path";
 import { APP_VERSION } from "@/lib/app-version";
@@ -378,6 +379,8 @@ export default function Sidebar() {
           </svg>
           {!isCollapsed && <span>{isCollapsed ? "Expand" : "Collapse"}</span>}
         </button>
+
+        <SyncAlertBadge isAdmin={userRole === "admin"} collapsed={isCollapsed} />
 
         <AutoSyncIndicator collapsed={isCollapsed} />
 

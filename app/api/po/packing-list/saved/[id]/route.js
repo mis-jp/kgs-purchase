@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { branchAllowed, getRequestBranchAccess } from "@/lib/branch-access";
-import { canEditSavedPackingList, normalizeSavedPackingList } from "@/lib/packing-list-saved";
+import { canEditSavedPackingList, describePackingListChange, normalizeSavedPackingList } from "@/lib/packing-list-saved";
+import { recordPackingListActivity } from "@/lib/packing-list-activity";
 import { MySqlService } from "@/services/mysql";
 
 export const runtime = "nodejs";
@@ -21,9 +22,13 @@ async function loadForUser(request, params) {
 
 export async function GET(request, { params }) {
     try {
-        const { res, record } = await loadForUser(request, params);
+        const { res, id, access, record } = await loadForUser(request, params);
         if (res) return res;
-        return NextResponse.json({ list: record }, NO_STORE);
+        const activity = await MySqlService.listPackingListActivity(id).catch((err) => {
+            console.error("[Saved packing lists] activity list", err?.message || err);
+            return [];
+        });
+        return NextResponse.json({ list: record, activity, canEdit: canEditSavedPackingList(record, access.user) }, NO_STORE);
     } catch (err) {
         console.error("[Saved packing lists] get", err?.message || err);
         return NextResponse.json({ message: "Could not open the packing list. Please try again." }, { status: 500 });
@@ -44,7 +49,8 @@ export async function PUT(request, { params }) {
             return NextResponse.json({ message: "You do not have access to this branch." }, { status: 403 });
         }
         const saved = await MySqlService.updatePackingList(id, value, access.user.username);
-        return NextResponse.json({ list: saved }, NO_STORE);
+        await recordPackingListActivity(saved, "updated", describePackingListChange(record, value), value, access.user.username);
+        return NextResponse.json({ list: { ...saved, snapshot: value.snapshot } }, NO_STORE);
     } catch (err) {
         console.error("[Saved packing lists] update", err?.message || err);
         return NextResponse.json({ message: "Could not update the packing list. Please try again." }, { status: 500 });
@@ -59,6 +65,7 @@ export async function DELETE(request, { params }) {
             return NextResponse.json({ message: "Only the person who saved this list or an admin can delete it." }, { status: 403 });
         }
         await MySqlService.deletePackingList(id);
+        await recordPackingListActivity(record, "deleted", `Deleted "${record.name}"`, null, access.user.username);
         return NextResponse.json({ ok: true }, NO_STORE);
     } catch (err) {
         console.error("[Saved packing lists] delete", err?.message || err);

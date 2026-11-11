@@ -75,7 +75,7 @@ export default function SyncHealthPanel() {
     const jobs = data?.jobs?.jobs || [];
 
     return (
-        <section className="admin-card sync-health">
+        <section className="admin-card sync-health" id="sync-health">
             <div className="admin-card-head">
                 <h2>Sync health</h2>
                 <button type="button" className="admin-btn admin-btn--ghost" onClick={load} disabled={loading}>
@@ -94,6 +94,28 @@ export default function SyncHealthPanel() {
                     {data.acumatica?.busy && (
                         <div className="admin-alert admin-alert--error" role="status">
                             Acumatica asked us to slow down. Requests resume at {formatWhen(data.acumatica.busyUntil)}.
+                        </div>
+                    )}
+
+                    {data.alerts?.length > 0 && (
+                        <div className="sync-health-alerts" role="alert">
+                            <strong>
+                                {data.alerts.length === 1 ? "1 sync problem needs attention" : `${data.alerts.length} sync problems need attention`}
+                            </strong>
+                            <ul>
+                                {data.alerts.map((a) => (
+                                    <li key={a.key}>
+                                        <span className="sync-health-alert-title">
+                                            {a.kind === "background-job" ? `${JOB_TEXT[a.job] || a.job}: ${a.title.toLowerCase()}` : a.title}
+                                        </span>
+                                        <span className="sync-health-alert-detail">
+                                            {a.detail}
+                                            {a.kind === "sync-step" && ` Last worked: ${a.since ? formatWhen(a.since) : "not in recent history"}.`}
+                                            {a.kind === "stale-data" && a.since && ` Last sync: ${formatWhen(a.since)}.`}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
                         </div>
                     )}
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
-import { packingLineKey } from "@/lib/packing-list";
+import { packingLineKey, packingTotals } from "@/lib/packing-list";
 import PoPickList from "./PoPickList";
 import PackingListTable from "./PackingListTable";
 import SavedPackingLists from "./SavedPackingLists";
@@ -201,6 +201,12 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
         [selected, linesCache, cacheKey]
     );
 
+    const snapshot = useMemo(() => {
+        if (linesLoading || linesFailed || !lines.length) return null;
+        const t = packingTotals(lines, manual, branch);
+        return { cbm: t.cbm, weightKg: t.weightKg };
+    }, [lines, manual, branch, linesLoading, linesFailed]);
+
     const changeBranch = (value) => {
         setBranchPick(value);
         setSelected([]);
@@ -327,6 +333,7 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
                 selected={selected}
                 manual={manual}
                 truckingFee={truckingFee}
+                snapshot={snapshot}
                 onLoad={loadSaved}
             />
 

@@ -31,3 +31,13 @@ test("a failed job records the error and does not block the next job", async () 
     assert.equal(rec.lastError, "boom");
     assert.equal(jobs.find((j) => j.name === "t-after").state, "idle");
 });
+
+test("failures in a row reset after a success", async () => {
+    const fail = () => runSerial("t-streak", async () => { throw new Error("x"); }, { gapMs: 0 }).catch(() => {});
+    await fail();
+    await fail();
+    const streak = () => getBackgroundJobStatus().jobs.find((j) => j.name === "t-streak").consecutiveFailures;
+    assert.equal(streak(), 2);
+    await runSerial("t-streak", async () => "ok", { gapMs: 0 });
+    assert.equal(streak(), 0);
+});

@@ -503,6 +503,47 @@ body.sidebar-collapsed .main-content {
   color: var(--text-primary);
 }
 
+.sidebar-sync-alert {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0 0.75rem 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--status-danger);
+  border-radius: var(--radius-md);
+  color: var(--status-danger);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+  background: transparent;
+}
+
+.sidebar-sync-alert:hover,
+.sidebar-sync-alert:focus-visible {
+  background: var(--status-danger);
+  color: #fff;
+}
+
+.sidebar-sync-alert-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 50%;
+  background: var(--status-danger);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.sidebar.collapsed .sidebar-sync-alert {
+  justify-content: center;
+  margin: 0 0.25rem 0.4rem;
+  padding: 0.5rem 0;
+}
+
 .sidebar.collapsed .sidebar-collapse-btn {
   width: calc(100% - 0.5rem);
   margin-left: 0.25rem;

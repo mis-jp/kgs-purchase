@@ -449,6 +449,38 @@
     opacity: 0.65;
 }
 
+.sync-health-alerts {
+    margin: 0.75rem 0 0.5rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--status-danger);
+    border-left-width: 4px;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+}
+
+.sync-health-alerts > strong {
+    color: var(--status-danger);
+}
+
+.sync-health-alerts ul {
+    margin: 0.5rem 0 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.45rem;
+}
+
+.sync-health-alert-title {
+    display: block;
+    font-weight: 700;
+}
+
+.sync-health-alert-detail {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
 .sync-health-tiles {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

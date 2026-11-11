@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { branchAllowed, getRequestBranchAccess, hasNoBranchAccess } from "@/lib/branch-access";
-import { normalizeSavedPackingList } from "@/lib/packing-list-saved";
+import { describePackingListChange, normalizeSavedPackingList } from "@/lib/packing-list-saved";
+import { recordPackingListActivity } from "@/lib/packing-list-activity";
 import { MySqlService } from "@/services/mysql";
 
 export const runtime = "nodejs";
@@ -19,7 +20,11 @@ export async function GET(request) {
             branch,
             branches: access.allBranches ? null : access.branchIds.map((b) => String(b).toUpperCase()),
         });
-        return NextResponse.json({ lists }, NO_STORE);
+        const snapshots = await MySqlService.latestPackingListSnapshots(lists.map((l) => l.id)).catch((err) => {
+            console.error("[Saved packing lists] snapshots", err?.message || err);
+            return {};
+        });
+        return NextResponse.json({ lists: lists.map((l) => ({ ...l, snapshot: snapshots[l.id] || null })) }, NO_STORE);
     } catch (err) {
         console.error("[Saved packing lists] list", err?.message || err);
         return NextResponse.json({ message: "Could not load saved packing lists. Please try again." }, { status: 500 });
@@ -37,7 +42,8 @@ export async function POST(request) {
             return NextResponse.json({ message: "You do not have access to this branch." }, { status: 403 });
         }
         const saved = await MySqlService.createPackingList(value, access.user.username);
-        return NextResponse.json({ list: saved }, { status: 201, ...NO_STORE });
+        await recordPackingListActivity(saved, "created", describePackingListChange(null, value), value, access.user.username);
+        return NextResponse.json({ list: { ...saved, snapshot: value.snapshot } }, { status: 201, ...NO_STORE });
     } catch (err) {
         console.error("[Saved packing lists] create", err?.message || err);
         return NextResponse.json({ message: "Could not save the packing list. Please try again." }, { status: 500 });

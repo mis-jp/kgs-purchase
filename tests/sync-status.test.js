@@ -1,6 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { freshnessLevel, describeFreshness, summarizeSyncLogs } from "../lib/sync-status.js";
+import { freshnessLevel, describeFreshness, summarizeSyncLogs, buildSyncAlerts } from "../lib/sync-status.js";
+
+test("summarizeSyncLogs counts errors in a row since the last success", () => {
+    const [entry] = summarizeSyncLogs([
+        { section: "Sales", status: "error", timestamp: "2026-11-10T05:00:00Z", message: "x" },
+        { section: "Sales", status: "started", timestamp: "2026-11-10T04:59:00Z" },
+        { section: "Sales", status: "error", timestamp: "2026-11-10T04:00:00Z" },
+        { section: "Sales", status: "error", timestamp: "2026-11-10T03:00:00Z" },
+        { section: "Sales", status: "completed", timestamp: "2026-11-10T02:00:00Z" },
+        { section: "Sales", status: "error", timestamp: "2026-11-10T01:00:00Z" },
+    ]);
+    assert.equal(entry.consecutiveErrors, 3);
+    assert.equal(entry.lastSuccessAt, "2026-11-10T02:00:00.000Z");
+});
+
+test("buildSyncAlerts raises repeated failures and stale data only", () => {
+    const alerts = buildSyncAlerts({
+        sections: [
+            { section: "Sales", consecutiveErrors: 3, lastError: "timeout", lastSuccessAt: null },
+            { section: "Inventory", consecutiveErrors: 2, lastError: "x" },
+        ],
+        jobs: [
+            { name: "job:a", consecutiveFailures: 4, lastError: "locked" },
+            { name: "job:b", consecutiveFailures: 1 },
+        ],
+        freshness: [
+            { key: "purchaseOrders", label: "Purchase orders", level: "alert", lastSync: "2026-11-09T00:00:00Z" },
+            { key: "sales", label: "Sales history", level: "warn", lastSync: "2026-11-10T00:00:00Z" },
+        ],
+    });
+    assert.deepEqual(alerts.map((a) => a.key), ["section:Sales", "job:job:a", "stale:purchaseOrders"]);
+    assert.equal(alerts[0].title, "Sales sync failed 3 times in a row");
+    assert.equal(alerts[2].title, "Purchase orders has not synced for over 12 hours");
+    assert.deepEqual(buildSyncAlerts({}), []);
+});
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse("2026-11-04T08:00:00Z");
