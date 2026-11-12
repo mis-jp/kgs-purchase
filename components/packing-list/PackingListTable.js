@@ -1,10 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+    CONTAINER_TYPES,
+    CUSTOM_CONTAINER_ID,
     PACKING_COLUMNS,
+    containerLimitError,
+    containerLimitsText,
     containerMixText,
     containerOptions,
+    containerTypesChanged,
+    loadContainerLimits,
+    resolveContainerTypes,
+    saveContainerLimits,
     freightRatePerCbm,
     packingLineFreight,
     parseManualQty,
@@ -44,6 +52,119 @@ function qtyText(value) {
     return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function LimitInput({ value, kind, placeholder, label, onChange }) {
+    const error = containerLimitError(value, kind);
+    return (
+        <span className="pl-limit-cell">
+            <input
+                className={`pl-qty-input pl-limit-input${error ? " is-invalid" : ""}`}
+                type="text"
+                inputMode="decimal"
+                value={value ?? ""}
+                placeholder={placeholder}
+                onChange={(e) => onChange(e.target.value)}
+                aria-label={label}
+                aria-invalid={error ? "true" : undefined}
+            />
+            {error && <span className="pl-limit-error">{error}</span>}
+        </span>
+    );
+}
+
+function ContainerLimitsEditor({ limits, onChange, onReset }) {
+    const set = (id, field, value) => onChange({ ...limits, [id]: { ...(limits[id] || {}), [field]: value } });
+    const custom = limits[CUSTOM_CONTAINER_ID] || {};
+    const customIncomplete = custom.enabled && (
+        String(custom.cbm ?? "").trim() === "" || String(custom.kg ?? "").trim() === ""
+        || containerLimitError(custom.cbm, "cbm") || containerLimitError(custom.kg, "kg")
+    );
+    return (
+        <div className="pl-limits">
+            <table className="pl-limits-table">
+                <thead>
+                    <tr>
+                        <th>Container</th>
+                        <th>Usable volume (m³)</th>
+                        <th>Max weight (kg)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {CONTAINER_TYPES.map((c) => (
+                        <tr key={c.id}>
+                            <td>{c.label}</td>
+                            <td>
+                                <LimitInput
+                                    kind="cbm"
+                                    value={limits[c.id]?.cbm}
+                                    placeholder={String(c.usableCbm)}
+                                    label={`${c.label} usable volume`}
+                                    onChange={(v) => set(c.id, "cbm", v)}
+                                />
+                            </td>
+                            <td>
+                                <LimitInput
+                                    kind="kg"
+                                    value={limits[c.id]?.kg}
+                                    placeholder={c.maxKg.toLocaleString()}
+                                    label={`${c.label} max weight`}
+                                    onChange={(v) => set(c.id, "kg", v)}
+                                />
+                            </td>
+                        </tr>
+                    ))}
+                    <tr className="pl-limits-custom">
+                        <td>
+                            <label className="pl-limits-check">
+                                <input
+                                    type="checkbox"
+                                    checked={!!custom.enabled}
+                                    onChange={(e) => set(CUSTOM_CONTAINER_ID, "enabled", e.target.checked)}
+                                />
+                                <input
+                                    className="pl-qty-input pl-limit-name"
+                                    type="text"
+                                    maxLength={40}
+                                    value={custom.label ?? ""}
+                                    placeholder="Custom container, e.g. 10-wheeler truck"
+                                    onChange={(e) => set(CUSTOM_CONTAINER_ID, "label", e.target.value)}
+                                    disabled={!custom.enabled}
+                                    aria-label="Custom container name"
+                                />
+                            </label>
+                        </td>
+                        <td>
+                            <LimitInput
+                                kind="cbm"
+                                value={custom.cbm}
+                                placeholder="m³"
+                                label="Custom container usable volume"
+                                onChange={(v) => set(CUSTOM_CONTAINER_ID, "cbm", v)}
+                            />
+                        </td>
+                        <td>
+                            <LimitInput
+                                kind="kg"
+                                value={custom.kg}
+                                placeholder="kg"
+                                label="Custom container max weight"
+                                onChange={(v) => set(CUSTOM_CONTAINER_ID, "kg", v)}
+                            />
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <div className="pl-limits-foot">
+                <span>
+                    {customIncomplete
+                        ? "Enter a volume and a weight to include the custom container."
+                        : "Leave a box blank to use the standard limit. Changes apply right away and are saved on this computer."}
+                </span>
+                <button type="button" className="pl-link-btn" onClick={onReset}>Reset to standard</button>
+            </div>
+        </div>
+    );
+}
+
 export default function PackingListTable({
     branch,
     lines,
@@ -59,12 +180,25 @@ export default function PackingListTable({
 }) {
     const [exporting, setExporting] = useState(false);
     const [exportError, setExportError] = useState("");
+    const [limits, setLimits] = useState({});
+    const [editingLimits, setEditingLimits] = useState(false);
+
+    useEffect(() => {
+        Promise.resolve().then(() => setLimits(loadContainerLimits()));
+    }, []);
+
+    const updateLimits = (next) => {
+        setLimits(next);
+        saveContainerLimits(next);
+    };
 
     const sorted = useMemo(() => sortPackingLines(lines), [lines]);
     const totals = useMemo(() => packingTotals(lines, manual, branch), [lines, manual, branch]);
     const missingSize = Math.max(totals.missingCbm, totals.missingWeight);
-    const containers = useMemo(() => containerOptions(totals.cbm, totals.weightKg), [totals.cbm, totals.weightKg]);
-    const mix = useMemo(() => recommendContainerMix(totals.cbm, totals.weightKg), [totals.cbm, totals.weightKg]);
+    const types = useMemo(() => resolveContainerTypes(limits), [limits]);
+    const customLimits = containerTypesChanged(types);
+    const containers = useMemo(() => containerOptions(totals.cbm, totals.weightKg, types), [totals.cbm, totals.weightKg, types]);
+    const mix = useMemo(() => recommendContainerMix(totals.cbm, totals.weightKg, types), [totals.cbm, totals.weightKg, types]);
     const hasManual = sorted.some((l) => manual[packingLineKey(branch, l.orderNbr, l.lineNbr, l.inventoryId)] !== undefined);
     const fee = parseManualQty(truckingFee);
     const feeInvalid = String(truckingFee).trim() !== "" && fee === null;
@@ -111,6 +245,8 @@ export default function PackingListTable({
                     c.label,
                     `${c.count} container(s), ${c.cbmFillPct}% volume, ${c.weightFillPct}% weight`,
                 ]),
+                [],
+                [customLimits ? "Loading limits (custom)" : "Loading limits (standard)", containerLimitsText(types)],
             ]);
             summary["!cols"] = [{ wch: 22 }, { wch: 48 }];
             const book = XLSX.utils.book_new();
@@ -270,11 +406,29 @@ export default function PackingListTable({
                                 <span className="pl-containers-mix">
                                     Suggested: <strong>{containerMixText(mix)}</strong>
                                 </span>
+                                <button
+                                    type="button"
+                                    className="pl-link-btn"
+                                    onClick={() => setEditingLimits((v) => !v)}
+                                    aria-expanded={editingLimits}
+                                >
+                                    {editingLimits ? "Done" : "Edit limits"}
+                                </button>
                             </div>
+                            {editingLimits && (
+                                <ContainerLimitsEditor
+                                    limits={limits}
+                                    onChange={updateLimits}
+                                    onReset={() => updateLimits({})}
+                                />
+                            )}
                             <div className="pl-containers-grid">
                                 {containers.map((c) => (
                                     <div key={c.id} className="pl-container-card">
                                         <span className="pl-container-label">{c.label}</span>
+                                        <span className="pl-container-limit">
+                                            {c.usableCbm.toLocaleString()} m³ / {c.maxKg.toLocaleString()} kg
+                                        </span>
                                         <strong className="pl-container-count">{c.count} needed</strong>
                                         <FillBar label="Volume" pct={c.cbmFillPct} />
                                         <FillBar label="Weight" pct={c.weightFillPct} />
@@ -285,8 +439,8 @@ export default function PackingListTable({
                                 ))}
                             </div>
                             <p className="pl-note">
-                                Uses practical loading limits: 20ft 28 m³ / 21,000 kg, 40ft 58 m³ / 26,000 kg,
-                                40ft High Cube 68 m³ / 26,000 kg.
+                                {customLimits ? "Uses your loading limits" : "Uses practical loading limits"}: {containerLimitsText(types)}.
+                                {" "}Containers needed = the larger of total volume ÷ volume limit and total weight ÷ weight limit, rounded up.
                                 {missingSize > 0 ? " Lines without size or weight are not counted." : ""}
                             </p>
                         </div>

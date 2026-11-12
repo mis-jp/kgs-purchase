@@ -597,3 +597,87 @@
         max-height: none;
     }
 }
+
+/* Container planning: user loading limits */
+.pl-containers-head .pl-containers-mix {
+    margin-left: auto;
+}
+
+.pl-container-limit {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.pl-limits {
+    margin-bottom: 0.8rem;
+    padding: 0.7rem 0.8rem;
+    border: 1px dashed var(--border-medium);
+    border-radius: var(--radius-md, 8px);
+    overflow-x: auto;
+}
+
+.pl-limits-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.pl-limits-table th {
+    padding: 0 0.5rem 0.4rem 0;
+    text-align: left;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.pl-limits-table td {
+    padding: 0.3rem 0.5rem 0.3rem 0;
+    vertical-align: top;
+}
+
+.pl-limit-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.pl-limit-input {
+    width: 9rem;
+}
+
+.pl-limit-input.is-invalid {
+    border-color: var(--status-danger);
+}
+
+.pl-limit-error {
+    font-size: 0.72rem;
+    color: var(--status-danger);
+}
+
+.pl-limits-check {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.pl-limits-check input[type="checkbox"] {
+    accent-color: var(--accent-primary);
+}
+
+.pl-limit-name {
+    width: min(18rem, 100%);
+    text-align: left;
+}
+
+.pl-limits-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}

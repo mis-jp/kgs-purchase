@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { fetchWithAuth } from "@/lib/api-client";
-import { containerFillSummary } from "@/lib/packing-list";
+import {
+    CONTAINER_LIMITS_EVENT,
+    containerFillSummary,
+    loadContainerLimits,
+    resolveContainerTypes,
+} from "@/lib/packing-list";
 
 async function readJson(res) {
     const data = await res.json().catch(() => ({}));
@@ -16,9 +21,9 @@ function formatWhen(iso) {
     return Number.isNaN(d.getTime()) ? "" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function fillLabel(snapshot) {
+function fillLabel(snapshot, types) {
     if (!snapshot) return "";
-    const fill = containerFillSummary(snapshot.cbm, snapshot.weightKg);
+    const fill = containerFillSummary(snapshot.cbm, snapshot.weightKg, types);
     return fill ? `${fill.text}, ${fill.fillPct}% full` : "";
 }
 
@@ -40,6 +45,14 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
     const [message, setMessage] = useState({ type: "", text: "" });
     const [detail, setDetail] = useState({ key: "", activity: [], canEdit: true, error: "" });
     const [showHistory, setShowHistory] = useState(false);
+    const [types, setTypes] = useState(() => resolveContainerTypes({}));
+
+    useEffect(() => {
+        const refresh = () => setTypes(resolveContainerTypes(loadContainerLimits()));
+        Promise.resolve().then(refresh);
+        window.addEventListener(CONTAINER_LIMITS_EVENT, refresh);
+        return () => window.removeEventListener(CONTAINER_LIMITS_EVENT, refresh);
+    }, []);
 
     useEffect(() => {
         if (!branch) return undefined;
@@ -71,7 +84,7 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
     const active = lists.find((l) => String(l.id) === String(activeId)) || null;
     const detailReady = detail.key === detailKey;
     const canEdit = !detailReady || detail.canEdit;
-    const activeFill = active?.snapshot ? containerFillSummary(active.snapshot.cbm, active.snapshot.weightKg) : null;
+    const activeFill = active?.snapshot ? containerFillSummary(active.snapshot.cbm, active.snapshot.weightKg, types) : null;
 
     const payload = () => {
         const prefix = `${String(branch).toUpperCase()}|`;
@@ -156,7 +169,7 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
                     >
                         <option value="">{lists.length ? "Open a saved list…" : "No saved lists for this branch"}</option>
                         {lists.map((l) => {
-                            const fill = fillLabel(l.snapshot);
+                            const fill = fillLabel(l.snapshot, types);
                             return (
                                 <option key={l.id} value={l.id}>
                                     {l.name} · {l.orderNbrs.length} PO(s){fill ? ` · ${fill}` : ""} · {l.updatedBy || l.createdBy || "—"} · {formatWhen(l.updatedAt)}
