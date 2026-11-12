@@ -236,9 +236,18 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
     const changeManual = (line, value) => {
         const key = packingLineKey(branch, line.orderNbr, line.lineNbr, line.inventoryId);
         setManual((prev) => {
+            const next = { ...prev, [key]: value };
+            writeManual(next);
+            return next;
+        });
+    };
+
+    const dropBlankManual = (line) => {
+        const key = packingLineKey(branch, line.orderNbr, line.lineNbr, line.inventoryId);
+        setManual((prev) => {
+            if (prev[key] === undefined || String(prev[key]).trim() !== "") return prev;
             const next = { ...prev };
-            if (String(value).trim() === "") delete next[key];
-            else next[key] = value;
+            delete next[key];
             writeManual(next);
             return next;
         });
@@ -367,6 +376,7 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
                         onRetry={() => setLinesTick((n) => n + 1)}
                         manual={manual}
                         onManualChange={changeManual}
+                        onManualBlur={dropBlankManual}
                         onClearManual={clearManual}
                         truckingFee={truckingFee}
                         onTruckingFeeChange={changeTruckingFee}

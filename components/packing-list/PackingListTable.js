@@ -19,6 +19,7 @@ import {
     recommendContainerMix,
     packingLineKey,
     packingLineTotals,
+    packingQty,
     packingSheetRows,
     packingTotals,
     sortPackingLines,
@@ -174,6 +175,7 @@ export default function PackingListTable({
     onRetry,
     manual,
     onManualChange,
+    onManualBlur,
     onClearManual,
     truckingFee = "",
     onTruckingFeeChange,
@@ -199,7 +201,7 @@ export default function PackingListTable({
     const customLimits = containerTypesChanged(types);
     const containers = useMemo(() => containerOptions(totals.cbm, totals.weightKg, types), [totals.cbm, totals.weightKg, types]);
     const mix = useMemo(() => recommendContainerMix(totals.cbm, totals.weightKg, types), [totals.cbm, totals.weightKg, types]);
-    const hasManual = sorted.some((l) => manual[packingLineKey(branch, l.orderNbr, l.lineNbr, l.inventoryId)] !== undefined);
+    const hasManual = sorted.some((l) => parseManualQty(manual[packingLineKey(branch, l.orderNbr, l.lineNbr, l.inventoryId)]) !== null);
     const fee = parseManualQty(truckingFee);
     const feeInvalid = String(truckingFee).trim() !== "" && fee === null;
     const rate = freightRatePerCbm(truckingFee, totals.cbm);
@@ -342,8 +344,8 @@ export default function PackingListTable({
                                 <tbody>
                                     {sorted.map((line, i) => {
                                         const key = packingLineKey(branch, line.orderNbr, line.lineNbr, line.inventoryId);
-                                        const value = manual[key] ?? "";
-                                        const t = packingLineTotals(line, value);
+                                        const value = manual[key] ?? qtyText(packingQty(line.qty));
+                                        const t = packingLineTotals(line, manual[key]);
                                         const f = packingLineFreight(t, rate);
                                         return (
                                             <tr key={`${key}#${i}`} className={t.overOrdered ? "pl-row-over" : undefined}>
@@ -362,10 +364,12 @@ export default function PackingListTable({
                                                         type="text"
                                                         inputMode="decimal"
                                                         value={value}
-                                                        placeholder={qtyText(line.qty)}
+                                                        placeholder={qtyText(packingQty(line.qty))}
+                                                        onFocus={(e) => e.target.select()}
                                                         onChange={(e) => onManualChange(line, e.target.value)}
+                                                        onBlur={() => onManualBlur?.(line)}
                                                         aria-label={`Manual qty for ${line.inventoryId} on ${line.orderNbr}`}
-                                                        title={t.overOrdered ? "More than the order qty" : "Leave blank to use the order qty"}
+                                                        title={t.overOrdered ? "More than the order qty" : "Starts at the order qty. Clear it to go back to the order qty."}
                                                     />
                                                 </td>
                                                 <td className="pl-num">{num(t.cbm, 4)}</td>

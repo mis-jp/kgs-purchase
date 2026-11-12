@@ -6,6 +6,7 @@ import Link from "next/link";
 import { fetchWithAuth } from "@/lib/api-client";
 import SyncHealthPanel from "@/components/admin/SyncHealthPanel";
 import AccessReviewPanel from "@/components/admin/AccessReviewPanel";
+import { APP_MODULES, moduleAccessLabel, parseAllowedModules } from "@/lib/module-access";
 import "@/styles/admin.css";
 
 const EMPTY_FORM = {
@@ -17,7 +18,8 @@ const EMPTY_FORM = {
     active: true,
     branchIds: [],
     allBranches: false,
-    moduleAccess: "all",
+    allModules: true,
+    modules: [],
 };
 
 export default function AdminPage() {
@@ -157,7 +159,17 @@ export default function AdminPage() {
         });
     };
 
+    const toggleModule = (moduleId) => {
+        setForm((f) => ({
+            ...f,
+            modules: f.modules.includes(moduleId)
+                ? f.modules.filter((id) => id !== moduleId)
+                : [...f.modules, moduleId],
+        }));
+    };
+
     const startEdit = (user) => {
+        const modules = user.role === "admin" ? [] : parseAllowedModules(user.allowedModules);
         setEditingId(user.id);
         setForm({
             username: user.username || "",
@@ -168,9 +180,8 @@ export default function AdminPage() {
             active: user.active !== false,
             branchIds: user.allBranches ? [] : (Array.isArray(user.branchIds) ? user.branchIds : []),
             allBranches: user.role === "admin" || !!user.allBranches,
-            moduleAccess: Array.isArray(user.allowedModules) && user.allowedModules.includes("forecast-generator")
-                ? "forecast-generator"
-                : "all",
+            allModules: modules.length === 0,
+            modules,
         });
         setBranchMenuOpen(false);
         setBranchQuery("");
@@ -188,6 +199,9 @@ export default function AdminPage() {
             if (form.role === "user" && !grantAll && !(form.branchIds || []).length) {
                 throw new Error("Select at least one branch, or choose All branches.");
             }
+            if (form.role === "user" && !form.allModules && !form.modules.length) {
+                throw new Error("Select at least one module, or choose All modules.");
+            }
             const payload = {
                 username: form.username,
                 fullName: form.fullName,
@@ -196,7 +210,7 @@ export default function AdminPage() {
                 active: form.active,
                 allBranches: grantAll,
                 branchIds: grantAll ? [] : form.branchIds,
-                moduleAccess: form.role === "admin" ? "all" : form.moduleAccess,
+                moduleAccess: form.role === "admin" || form.allModules ? "all" : form.modules,
             };
             if (form.password) payload.password = form.password;
 
@@ -455,7 +469,7 @@ export default function AdminPage() {
                                     setForm((f) => ({
                                         ...f,
                                         role,
-                                        moduleAccess: role === "admin" ? "all" : f.moduleAccess,
+                                        allModules: role === "admin" ? true : f.allModules,
                                     }));
                                     if (role === "admin") {
                                         setBranchMenuOpen(false);
@@ -470,12 +484,12 @@ export default function AdminPage() {
                         <label>
                             Module access
                             <select
-                                value={form.role === "admin" ? "all" : form.moduleAccess}
+                                value={form.role === "admin" || form.allModules ? "all" : "selected"}
                                 disabled={form.role === "admin"}
-                                onChange={(e) => setForm((f) => ({ ...f, moduleAccess: e.target.value }))}
+                                onChange={(e) => setForm((f) => ({ ...f, allModules: e.target.value === "all" }))}
                             >
                                 <option value="all">All modules</option>
-                                <option value="forecast-generator">Forecast Generator only</option>
+                                <option value="selected">Only selected modules</option>
                             </select>
                         </label>
                         <label className="admin-check">
@@ -487,6 +501,31 @@ export default function AdminPage() {
                             Active
                         </label>
                     </div>
+                    {form.role === "user" && !form.allModules && (
+                        <fieldset className="admin-module-picker">
+                            <legend>Modules this account can open</legend>
+                            <div className="admin-module-grid">
+                                {APP_MODULES.map((m) => (
+                                    <label
+                                        key={m.id}
+                                        className={`admin-module-option${form.modules.includes(m.id) ? " is-selected" : ""}`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={form.modules.includes(m.id)}
+                                            onChange={() => toggleModule(m.id)}
+                                        />
+                                        <span>{m.label}</span>
+                                    </label>
+                                ))}
+                            </div>
+                            <p className="admin-header-hint">
+                                {form.modules.length
+                                    ? `They will only see ${moduleAccessLabel(form.modules)} in the menu.`
+                                    : "Tick at least one module."}
+                            </p>
+                        </fieldset>
+                    )}
                     <div className="admin-branch-picker" ref={branchPickerRef}>
                         <div className="admin-branch-picker-head">
                             <span>Branch access</span>
@@ -525,8 +564,8 @@ export default function AdminPage() {
                             </div>
                         ) : (
                             <>
-                                {form.moduleAccess === "forecast-generator" && (
-                                    <p className="admin-header-hint">This account can open Forecast Generator only. Choose the branches they may plan for.</p>
+                                {!form.allModules && form.modules.length > 0 && (
+                                    <p className="admin-header-hint">Choose the branches they may use in {moduleAccessLabel(form.modules)}.</p>
                                 )}
                                 <button
                                     type="button"
@@ -642,7 +681,7 @@ export default function AdminPage() {
                                             {u.role === "admin" || !(u.allowedModules || []).length ? (
                                                 <span>All modules</span>
                                             ) : (
-                                                <span className="admin-badge admin-badge--forecast">Forecast Generator</span>
+                                                <span className="admin-badge admin-badge--forecast">{moduleAccessLabel(u.allowedModules)}</span>
                                             )}
                                         </td>
                                         <td className="admin-branches-cell">

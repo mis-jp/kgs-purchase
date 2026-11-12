@@ -89,7 +89,7 @@ export default function SavedPackingLists({ branch, selected, manual, truckingFe
     const payload = () => {
         const prefix = `${String(branch).toUpperCase()}|`;
         const manualQty = Object.fromEntries(
-            Object.entries(manual || {}).filter(([k]) => k.toUpperCase().startsWith(prefix))
+            Object.entries(manual || {}).filter(([k, v]) => k.toUpperCase().startsWith(prefix) && String(v ?? "").trim() !== "")
         );
         return { name: name.trim() || active?.name || "", branch, orderNbrs: selected, manualQty, truckingFee, snapshot };
     };
