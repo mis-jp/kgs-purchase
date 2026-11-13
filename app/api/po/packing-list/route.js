@@ -8,6 +8,8 @@ import {
 } from "@/lib/branch-access";
 import { getStockWarehouseIdsForBranch } from "@/lib/companies";
 import { MySqlService } from "@/services/mysql";
+import { normalizeInvKey } from "@/lib/forecast-generator";
+import { MAIN_BRANCH } from "@/lib/packing-list";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +20,8 @@ const MAX_ORDER_NBRS = 200;
 /**
  * Packing List Generator data (read-only, MySQL only).
  *   mode=orders  POs that have lines for the branch (light rows for the pick list)
- *   mode=lines   lines of the chosen POs for that branch, with item dimensions
+ *   mode=lines   lines of the chosen POs for that branch, with item dimensions and
+ *                available stock in the branch and in MAIN
  */
 
 function branchLineMatcher(branch) {
@@ -116,9 +119,17 @@ async function listLines(sp, branch, companyId) {
     for (let i = 0; i < ids.length; i += 200) {
         Object.assign(dims, await MySqlService.getItemDimensionsBatch(ids.slice(i, i + 200)));
     }
+    const isMain = branch.toUpperCase() === MAIN_BRANCH;
+    const [branchStock, mainStock] = await Promise.all([
+        MySqlService.getBranchOnHandForItems(ids, { branch, companyId }),
+        isMain ? null : MySqlService.getBranchOnHandForItems(ids, { branch: MAIN_BRANCH, companyId: "main" }),
+    ]);
     for (const line of lines) {
         const key = String(line.inventoryId || "").trim();
+        const stockKey = normalizeInvKey(key);
         line.dimensions = dims[key] || dims[key.toUpperCase()] || null;
+        line.branchStock = branchStock.get(stockKey) ?? 0;
+        line.mainStock = isMain ? line.branchStock : (mainStock.get(stockKey) ?? 0);
     }
     return { lines };
 }

@@ -21,6 +21,8 @@ import {
     packingLineTotals,
     packingQty,
     packingSheetRows,
+    packingStockColumns,
+    packingStockPlan,
     packingTotals,
     sortPackingLines,
 } from "@/lib/packing-list";
@@ -52,6 +54,36 @@ function FillBar({ label, pct }) {
 function qtyText(value) {
     return Number(value).toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
+
+function stockText(value) {
+    return value === null || value === undefined ? "—" : qtyText(value);
+}
+
+const COLUMN_WIDTHS = {
+    Branch: "56px",
+    "Order Nbr": "90px",
+    "Order Date": "86px",
+    Description: "auto",
+    "Inventory ID": "122px",
+    "Order Qty": "64px",
+    "Qty (Manual)": "82px",
+    "Main Stock": "68px",
+    "Transfer from Main": "76px",
+    "Total CBM": "80px",
+    "Total Weight": "100px",
+    "Freight / Total CBM": "80px",
+    "Freight/Pc": "68px",
+};
+
+/** Branch stock columns are named after the branch, so anything not listed is a stock column. */
+function columnWidth(column) {
+    return COLUMN_WIDTHS[column] || "68px";
+}
+
+const SIZE_ISSUE_HINT = {
+    oversize: "A box side is longer than 12 m, probably typed in centimetres. CBM is left out until the size is fixed in Stock Items.",
+    "too-light": "The box weighs under 5 kg per m³, which usually means a side is too big. Check the size in Stock Items.",
+};
 
 function LimitInput({ value, kind, placeholder, label, onChange }) {
     const error = containerLimitError(value, kind);
@@ -196,7 +228,13 @@ export default function PackingListTable({
 
     const sorted = useMemo(() => sortPackingLines(lines), [lines]);
     const totals = useMemo(() => packingTotals(lines, manual, branch), [lines, manual, branch]);
-    const missingSize = Math.max(totals.missingCbm, totals.missingWeight);
+    const missingSize = Math.max(totals.missingCbm - totals.oversize, totals.missingWeight);
+    const stockColumns = useMemo(() => packingStockColumns(branch), [branch]);
+    const screenColumns = useMemo(() => {
+        const at = PACKING_COLUMNS.indexOf("Qty (Manual)") + 1;
+        return [...PACKING_COLUMNS.slice(0, at), ...stockColumns, ...PACKING_COLUMNS.slice(at)];
+    }, [stockColumns]);
+    const stockPlan = useMemo(() => packingStockPlan(lines, manual, branch), [lines, manual, branch]);
     const types = useMemo(() => resolveContainerTypes(limits), [limits]);
     const customLimits = containerTypesChanged(types);
     const containers = useMemo(() => containerOptions(totals.cbm, totals.weightKg, types), [totals.cbm, totals.weightKg, types]);
@@ -223,12 +261,12 @@ export default function PackingListTable({
                     [null, "Trucking Fee", fee],
                     [null, "Rate per cbm", rate === null ? null : Math.round(rate * 100) / 100],
                     [],
-                    PACKING_COLUMNS,
-                    ...packingSheetRows(lines, manual, branch, truckingFee),
+                    [...PACKING_COLUMNS, ...stockColumns],
+                    ...packingSheetRows(lines, manual, branch, truckingFee, { stock: true }),
                 ],
                 { cellDates: true, dateNF: "yyyy-mm-dd" }
             );
-            sheet["!cols"] = [10, 14, 12, 48, 18, 11, 12, 12, 13, 18, 11].map((wch) => ({ wch }));
+            sheet["!cols"] = [10, 14, 12, 48, 18, 11, 12, 12, 13, 18, 11, ...stockColumns.map(() => 16)].map((wch) => ({ wch }));
             const summary = XLSX.utils.aoa_to_sheet([
                 ["Branch", branch],
                 ["Purchase orders", totals.orderCount],
@@ -236,8 +274,14 @@ export default function PackingListTable({
                 ["Total qty", totals.qty],
                 ["Total CBM", totals.cbm],
                 ["Total weight (kg)", totals.weightKg],
-                ["Lines without size", totals.missingCbm],
+                ["Lines without size", totals.missingCbm - totals.oversize],
                 ["Lines without weight", totals.missingWeight],
+                ["Lines with a size over 12 m (left out)", totals.oversize],
+                ["Lines under 5 kg per m³ (check size)", totals.tooLight],
+                ...(stockPlan.isMain ? [] : [
+                    ["Transfer from Main", stockPlan.transfer],
+                    ["Short at Main", stockPlan.short],
+                ]),
                 ["Trucking fee", fee],
                 ["Rate per CBM", rate === null ? null : Math.round(rate * 100) / 100],
                 ["Total freight", freightTotal === null ? null : Math.round(freightTotal * 100) / 100],
@@ -332,10 +376,18 @@ export default function PackingListTable({
                     {sorted.length > 0 && (
                         <div className="db-table-wrap pl-table-wrap">
                             <table className="db-table pl-table">
+                                <colgroup>
+                                    {screenColumns.map((c) => (
+                                        <col key={c} style={{ width: columnWidth(c) }} />
+                                    ))}
+                                </colgroup>
                                 <thead>
                                     <tr>
-                                        {PACKING_COLUMNS.map((c) => (
-                                            <th key={c} className={/^(Order Qty|Qty|Total|Freight)/.test(c) ? "pl-num" : undefined}>
+                                        {screenColumns.map((c) => (
+                                            <th
+                                                key={c}
+                                                className={stockColumns.includes(c) ? "pl-num pl-stock-col" : /^(Order Qty|Qty|Total|Freight)/.test(c) ? "pl-num" : undefined}
+                                            >
                                                 {c}
                                             </th>
                                         ))}
@@ -347,15 +399,22 @@ export default function PackingListTable({
                                         const value = manual[key] ?? qtyText(packingQty(line.qty));
                                         const t = packingLineTotals(line, manual[key]);
                                         const f = packingLineFreight(t, rate);
+                                        const s = stockPlan.byKey.get(key);
                                         return (
                                             <tr key={`${key}#${i}`} className={t.overOrdered ? "pl-row-over" : undefined}>
                                                 <td>{branch}</td>
                                                 <td className="pl-nowrap">{line.orderNbr}</td>
                                                 <td className="pl-nowrap">{formatDate(line.orderDate)}</td>
-                                                <td className="pl-desc" title={line.description || ""}>{line.description || "—"}</td>
-                                                <td className="pl-nowrap">
-                                                    {line.inventoryId}
-                                                    {!line.dimensions && <span className="pl-tag">No size</span>}
+                                                <td className="pl-desc" title={line.description || ""}>
+                                                    <span className="pl-desc-text">{line.description || "—"}</span>
+                                                </td>
+                                                <td className="pl-inv">
+                                                    <span className="pl-inv-id">{line.inventoryId}</span>
+                                                    {t.sizeIssue ? (
+                                                        <span className="pl-tag pl-tag-warn" title={SIZE_ISSUE_HINT[t.sizeIssue]}>Check size</span>
+                                                    ) : t.cbm === null && t.qty > 0 ? (
+                                                        <span className="pl-tag">No size</span>
+                                                    ) : null}
                                                 </td>
                                                 <td className="pl-num">{qtyText(line.qty)}</td>
                                                 <td className="pl-num">
@@ -372,6 +431,20 @@ export default function PackingListTable({
                                                         title={t.overOrdered ? "More than the order qty" : "Starts at the order qty. Clear it to go back to the order qty."}
                                                     />
                                                 </td>
+                                                {stockPlan.isMain ? (
+                                                    <td className="pl-num pl-stock-col">{stockText(s?.mainStock)}</td>
+                                                ) : (
+                                                    <>
+                                                        <td className="pl-num pl-stock-col">{stockText(s?.mainStock)}</td>
+                                                        <td className="pl-num pl-stock-col">{stockText(s?.branchStock)}</td>
+                                                        <td
+                                                            className={`pl-num pl-stock-col pl-transfer${s?.short > 0 ? " is-short" : ""}`}
+                                                            title={s?.short > 0 ? `Main is short by ${qtyText(s.short)}` : "Main can send the full qty"}
+                                                        >
+                                                            {stockText(s?.transfer)}
+                                                        </td>
+                                                    </>
+                                                )}
                                                 <td className="pl-num">{num(t.cbm, 4)}</td>
                                                 <td className="pl-num">{t.weightKg === null ? "—" : `${num(t.weightKg, 2)} kg`}</td>
                                                 <td className="pl-num">{num(f.freight, 2)}</td>
@@ -389,6 +462,17 @@ export default function PackingListTable({
                                         <td />
                                         <td />
                                         <td className="pl-num">{qtyText(totals.qty)}</td>
+                                        {stockPlan.isMain ? (
+                                            <td />
+                                        ) : (
+                                            <>
+                                                <td />
+                                                <td />
+                                                <td className={`pl-num pl-transfer${stockPlan.short > 0 ? " is-short" : ""}`}>
+                                                    {qtyText(stockPlan.transfer)}
+                                                </td>
+                                            </>
+                                        )}
                                         <td className="pl-num">{num(totals.cbm, 4)}</td>
                                         <td className="pl-num">{num(totals.weightKg, 2)} kg</td>
                                         <td className="pl-num pl-freight-total">{num(freightTotal, 2)}</td>
@@ -398,9 +482,27 @@ export default function PackingListTable({
                             </table>
                         </div>
                     )}
+                    {sorted.length > 0 && !stockPlan.isMain && (
+                        <div className="pl-note">
+                            Stock is the available qty in {String(branch).toUpperCase()} and in MAIN. Transfer from Main is how much of each line MAIN can send now;
+                            {stockPlan.shortLines > 0
+                                ? ` ${stockPlan.shortLines} line(s) are short at MAIN by ${qtyText(stockPlan.short)} in total.`
+                                : " MAIN has enough for every line."}
+                        </div>
+                    )}
+                    {totals.oversize > 0 && (
+                        <div className="pl-note pl-warn">
+                            {totals.oversize} line(s) have a box side longer than 12 m in Stock Items (probably typed in centimetres), so their CBM is left out of the totals. Fix the size in Stock Items.
+                        </div>
+                    )}
+                    {totals.tooLight > 0 && (
+                        <div className="pl-note pl-warn">
+                            {totals.tooLight} line(s) weigh under 5 kg per m³, which usually means a box side is too big. Their CBM is still counted; check the size in Stock Items.
+                        </div>
+                    )}
                     {missingSize > 0 && (
                         <div className="pl-note">
-                            {missingSize} line(s) have no size or weight in Stock Items, so they are left out of the totals.
+                            {missingSize} line(s) have no usable size or weight in Stock Items, so they are left out of the totals.
                         </div>
                     )}
                     {!loading && containers.length > 0 && (

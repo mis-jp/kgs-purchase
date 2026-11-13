@@ -209,9 +209,27 @@
     overflow: auto;
 }
 
+.pl-table {
+    min-width: 1040px;
+}
+
 .pl-table th,
 .pl-table td {
-    font-size: 0.82rem;
+    padding: 0.5rem 0.4rem;
+    font-size: 0.8rem;
+    vertical-align: middle;
+    overflow-wrap: anywhere;
+}
+
+.pl-table thead th {
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+    vertical-align: bottom;
+}
+
+.pl-table thead th.pl-num {
+    text-align: right;
 }
 
 .pl-table thead th {
@@ -225,23 +243,40 @@
 .pl-num {
     text-align: right;
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.pl-table td.pl-num {
+    overflow-wrap: normal;
 }
 
 .pl-nowrap {
     white-space: nowrap;
 }
 
-.pl-desc {
-    min-width: 220px;
-    max-width: 360px;
+.pl-desc-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: break-word;
+    line-height: 1.3;
+}
+
+.pl-inv-id {
+    display: block;
+    font-variant-numeric: tabular-nums;
+}
+
+.pl-inv .pl-tag {
+    margin: 0.2rem 0 0;
 }
 
 .pl-tag {
     display: inline-block;
     margin-left: 0.4rem;
+    white-space: nowrap;
     padding: 0 0.4rem;
     border-radius: var(--radius-sm);
     border: 1px solid var(--status-warning);
@@ -252,6 +287,8 @@
 
 .pl-qty-input {
     width: 90px;
+    max-width: 100%;
+    box-sizing: border-box;
     padding: 0.3rem 0.45rem;
     border: 1px solid var(--border-medium);
     border-radius: var(--radius-sm);
@@ -278,9 +315,9 @@
     position: sticky;
     bottom: 0;
     z-index: 2;
-    padding: 1rem 0.75rem;
+    padding: 0.75rem 0.4rem;
     background: var(--bg-elevated);
-    font-size: 0.88rem;
+    font-size: 0.82rem;
     font-weight: 700;
     line-height: 1.4;
     white-space: nowrap;
@@ -680,4 +717,31 @@
     margin-top: 0.5rem;
     font-size: 0.78rem;
     color: var(--text-secondary);
+}
+
+.pl-stock-col {
+    white-space: nowrap;
+}
+
+th.pl-stock-col {
+    color: var(--accent-primary, var(--text-secondary));
+}
+
+.pl-transfer {
+    font-weight: 700;
+    color: var(--status-success);
+}
+
+.pl-transfer.is-short {
+    color: var(--status-danger);
+}
+
+.pl-tag-warn {
+    border-color: var(--status-danger);
+    color: var(--status-danger);
+    cursor: help;
+}
+
+.pl-note.pl-warn {
+    color: var(--status-danger);
 }
