@@ -40,6 +40,7 @@ import {
     sqlPoLineOpenQty,
     sqlPoLineOrderQty,
 } from "@/lib/open-po-match.js";
+import { findVendorRenames } from "@/lib/vendor-sync.js";
 
 const pool = mysql.createPool({
     host: process.env.MYSQL_HOST,
@@ -1209,23 +1210,85 @@ export const MySqlService = {
         await this.upsertPurchaseOrderDestFromLines(rows);
     },
 
+    /**
+     * Save vendors from Acumatica. A new non-blank name always replaces the saved one,
+     * so renames in Acumatica reach the directory. Returns the vendors whose name changed.
+     */
     async upsertVendors(rows) {
-        if (!rows.length) return;
+        const clean = (rows || []).filter((r) => String(r?.vendor_id || "").trim());
+        if (!clean.length) return { renamed: [] };
         const connection = await purchasePool.getConnection();
         try {
-            const sql = `
+            const ids = clean.map((r) => String(r.vendor_id).trim());
+            const [existing] = await connection.query(
+                `SELECT vendor_id, vendor_name FROM vendors WHERE vendor_id IN (?)`,
+                [ids]
+            );
+            const renamed = findVendorRenames(existing, clean);
+            const values = clean.map((r) => [
+                String(r.vendor_id).trim(),
+                r.vendor_name,
+                r.status,
+                r.last_sync,
+            ]);
+            // Non-blank Acumatica names always overwrite (renames + case changes).
+            await connection.query(
+                `
                 INSERT INTO vendors (vendor_id, vendor_name, status, last_sync)
                 VALUES ?
                 ON DUPLICATE KEY UPDATE
-                vendor_name = COALESCE(NULLIF(VALUES(vendor_name), ''), vendor_name),
+                vendor_name = IF(NULLIF(VALUES(vendor_name), '') IS NULL, vendor_name, VALUES(vendor_name)),
                 status = VALUES(status),
                 last_sync = VALUES(last_sync)
-            `;
-            const values = rows.map(r => [r.vendor_id, r.vendor_name, r.status, r.last_sync]);
-            await connection.query(sql, [values]);
+                `,
+                [values]
+            );
+            if (renamed.length) {
+                console.log(
+                    `>>> [MySQL] ${renamed.length} vendor(s) renamed in Acumatica:`,
+                    renamed.slice(0, 10).map((r) => `${r.vendorId}: "${r.from}" → "${r.to}"`).join("; ")
+                );
+                invalidateCache("po:");
+            }
+            return { renamed };
         } finally {
             connection.release();
         }
+    },
+
+    /**
+     * Copy each vendor's current directory name onto its purchase orders and receipts,
+     * so a supplier renamed in Acumatica shows its new name everywhere. Vendor ID decides the match.
+     */
+    async alignVendorNamesOnDocuments() {
+        const out = { orders: 0, receipts: 0 };
+        try {
+            const [orders] = await purchasePool.query(`
+                UPDATE purchase_history h
+                INNER JOIN vendors v ON v.vendor_id COLLATE utf8mb4_unicode_ci = h.vendor_id
+                SET h.vendor_name = v.vendor_name
+                WHERE TRIM(COALESCE(v.vendor_name, '')) != ''
+                  AND (h.vendor_name IS NULL OR BINARY h.vendor_name <> BINARY v.vendor_name)
+            `);
+            out.orders = Number(orders?.affectedRows) || 0;
+        } catch (err) {
+            console.error("[MySQL alignVendorNamesOnDocuments orders Error]", err.message);
+        }
+        try {
+            await this.ensurePurchaseReceiptsTable();
+            const [receipts] = await purchasePool.query(`
+                UPDATE purchase_receipts r
+                INNER JOIN vendors v ON v.vendor_id COLLATE utf8mb4_unicode_ci = r.vendor_id
+                SET r.vendor_name = v.vendor_name
+                WHERE TRIM(COALESCE(v.vendor_name, '')) != ''
+                  AND (r.vendor_name IS NULL OR BINARY r.vendor_name <> BINARY v.vendor_name)
+            `);
+            out.receipts = Number(receipts?.affectedRows) || 0;
+        } catch (err) {
+            console.error("[MySQL alignVendorNamesOnDocuments receipts Error]", err.message);
+        }
+        if (out.orders || out.receipts) invalidateFor("purchase-orders.changed");
+        return out;
     },
 
     /**

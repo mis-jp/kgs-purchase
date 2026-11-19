@@ -7,6 +7,7 @@ import {
 } from "@/lib/acumatica-sales-aggregate";
 import { isExcludedBranchAlias, isExcludedLocationAlias } from "@/lib/companies";
 import { busyRetryDelayMs, isAcumaticaUnauthorized } from "@/lib/acumatica-retry";
+import { acumaticaList } from "@/lib/vendor-sync";
 const ACU_BASE = `${process.env.ACUMATICA_BASE_URL}/entity/Default/20.200.001`;
 
 // Bypasses 'CERT_HAS_EXPIRED' error for Acumatica connections
@@ -1303,7 +1304,7 @@ export const AcumaticaService = {
         const url = `${ACU_BASE}/Vendor?$top=${top}&$skip=${skip}`;
         try {
             const data = await this._getVendorJson(url, credential, 90000);
-            const raw = data.value || [];
+            const raw = acumaticaList(data);
             const rows = raw.map((v) => this._mapVendorRow(v)).filter(Boolean);
             if (!rows.length && raw[0]) {
                 console.warn("[Acumatica] Vendor directory row had no name. Keys:", Object.keys(raw[0]).slice(0, 20).join(", "));
@@ -1323,8 +1324,7 @@ export const AcumaticaService = {
         const url = `${ACU_BASE}/Vendor?$top=50&$filter=substringof('${s}', VendorName)`;
         try {
             const data = await this._getVendorJson(url, credential);
-            const vendors = data.value || [];
-            return vendors.map((v) => this._mapVendorRow(v)).filter(Boolean);
+            return acumaticaList(data).map((v) => this._mapVendorRow(v)).filter(Boolean);
         } catch (err) {
             console.warn("[Acumatica] Vendor name lookup skipped:", err.message);
             return [];
@@ -1346,7 +1346,7 @@ export const AcumaticaService = {
                 const url = `${ACU_BASE}/Vendor?$top=1&$filter=VendorID eq '${safe}'`;
                 try {
                     const data = await this._getVendorJson(url, credential);
-                    const row = this._mapVendorRow((data.value || [])[0]);
+                    const row = this._mapVendorRow(acumaticaList(data)[0]);
                     if (row) out.push(row);
                     else notFound.push(id);
                 } catch (err) {
@@ -1372,8 +1372,7 @@ export const AcumaticaService = {
         }
 
         const res = await this.fetchWithRetry(url, cookie);
-        const data = await res.json();
-        const vendors = data.value || [];
+        const vendors = acumaticaList(await res.json());
 
         return {
             vendors: vendors.map(v => ({

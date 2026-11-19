@@ -1,4 +1,5 @@
 import { AcumaticaService, extractStockItemCatalog, extractWarehouseLevels } from "@/services/acumatica";
+import { acumaticaList } from "@/lib/vendor-sync";
 import { MySqlService, INVENTORY_SYNC_TABLE } from "@/services/mysql";
 import { NextResponse } from "next/server";
 import { getSessionFromRequest, getSessionIdFromRequest, getCompanyCredential, getSessionCookies } from "@/lib/session-store";
@@ -607,24 +608,20 @@ export async function POST(request) {
                 if (options.inventory || options.sales) {
                     send({ section: "Suppliers", details: "Updating vendor directory...", progress: 5 });
                     let vendorCount = 0;
+                    let renamedCount = 0;
                     try {
                         const vendorPageSize = 500;
                         let vendorSkip = 0;
                         while (true) {
-                            const url = `${ACU_BASE}/Vendor?$top=${vendorPageSize}&$skip=${vendorSkip}`;
+                            const url = `${ACU_BASE}/Vendor?$select=VendorID,VendorName,Status&$top=${vendorPageSize}&$skip=${vendorSkip}`;
                             const res = await AcumaticaService.fetchWithRetry(url, effectiveCookie);
-                            const data = await res.json();
-                            const vendors = data.value || [];
+                            const vendors = acumaticaList(await res.json());
                             if (vendors.length === 0) break;
 
-                            const vendorRows = vendors.map(v => ({
-                                vendor_id: String(getF(v, "VendorID")).trim(),
-                                vendor_name: String(getF(v, "VendorName")).trim(),
-                                status: String(getF(v, "Status")).trim(),
-                                last_sync: new Date()
-                            }));
-                            await MySqlService.upsertVendors(vendorRows);
+                            const vendorRows = vendors.map((v) => AcumaticaService._mapVendorRow(v)).filter(Boolean);
+                            const { renamed } = await MySqlService.upsertVendors(vendorRows);
                             vendorCount += vendorRows.length;
+                            renamedCount += renamed.length;
 
                             send({
                                 section: "Suppliers",
@@ -636,11 +633,17 @@ export async function POST(request) {
                             if (vendors.length < vendorPageSize) break;
                             vendorSkip += vendorPageSize;
                         }
-                        await MySqlService.logSyncEvent(options.mode, "Suppliers", "completed", vendorCount);
+                        const aligned = vendorCount > 0
+                            ? await MySqlService.alignVendorNamesOnDocuments()
+                            : { orders: 0, receipts: 0 };
+                        const renameNote = renamedCount || aligned.orders || aligned.receipts
+                            ? `${renamedCount} supplier(s) renamed; names updated on ${aligned.orders} PO(s) and ${aligned.receipts} receipt(s).`
+                            : "";
+                        await MySqlService.logSyncEvent(options.mode, "Suppliers", "completed", vendorCount, renameNote);
                         send({
                             section: "Suppliers",
                             status: "done",
-                            details: `Supplier sync complete (${vendorCount} vendors).`,
+                            details: `Supplier sync complete (${vendorCount} vendors).${renameNote ? ` ${renameNote}` : ""}`,
                             progress: 100,
                             count: vendorCount
                         });
