@@ -3155,7 +3155,9 @@ export const MySqlService = {
         if (isExcludedBranchAlias(branch)) return map;
 
         const effectiveCompanyId = resolveCompanyIdForBranch(companyId, branch);
-        const destinations = getStockWarehouseIdsForBranch(branch);
+        const destinations = getStockWarehouseIdsForBranch(branch)
+            .map((id) => String(id).trim().toUpperCase())
+            .filter((id) => id && !isExcludedBranchAlias(id));
         if (!destinations.length) return map;
 
         try {
@@ -3166,6 +3168,7 @@ export const MySqlService = {
             const where = [
                 `f.${whCol} != '__catalog__'`,
                 `UPPER(TRIM(COALESCE(f.${whCol},''))) IN (${ph})`,
+                // Sellable stock only: never count DAMAGE / DISCOUNTED warehouses or locations.
                 damageEx.clause,
             ];
             const params = [...destinations, ...damageEx.params];
@@ -3208,7 +3211,9 @@ export const MySqlService = {
         if (!keys.length || isExcludedBranchAlias(branch)) return map;
 
         const effectiveCompanyId = resolveCompanyIdForBranch(companyId, branch);
-        const destinations = getStockWarehouseIdsForBranch(branch);
+        const destinations = getStockWarehouseIdsForBranch(branch)
+            .map((id) => String(id).trim().toUpperCase())
+            .filter((id) => id && !isExcludedBranchAlias(id));
         if (!destinations.length) return map;
 
         try {
@@ -3221,6 +3226,7 @@ export const MySqlService = {
                 `f.${whCol} != '__catalog__'`,
                 `UPPER(TRIM(COALESCE(f.${whCol},''))) IN (${whPh})`,
                 `UPPER(REPLACE(TRIM(f.inventory_id), ' ', '')) IN (${idPh})`,
+                // Sellable stock only: never count DAMAGE / DISCOUNTED warehouses or locations.
                 damageEx.clause,
             ];
             const params = [...destinations, ...keys, ...damageEx.params];

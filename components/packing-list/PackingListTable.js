@@ -484,7 +484,7 @@ export default function PackingListTable({
                     )}
                     {sorted.length > 0 && !stockPlan.isMain && (
                         <div className="pl-note">
-                            Stock is the available qty in {String(branch).toUpperCase()} and in MAIN. Transfer from Main is how much of each line MAIN can send now;
+                            Stock is the available qty in {String(branch).toUpperCase()} and in MAIN (DAMAGE and DISCOUNTED locations are left out). Transfer from Main is how much of each line MAIN can send now;
                             {stockPlan.shortLines > 0
                                 ? ` ${stockPlan.shortLines} line(s) are short at MAIN by ${qtyText(stockPlan.short)} in total.`
                                 : " MAIN has enough for every line."}

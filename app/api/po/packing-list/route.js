@@ -6,10 +6,10 @@ import {
     getRequestBranchAccess,
     hasNoBranchAccess,
 } from "@/lib/branch-access";
-import { getStockWarehouseIdsForBranch } from "@/lib/companies";
+import { getStockWarehouseIdsForBranch, isExcludedBranchAlias } from "@/lib/companies";
 import { MySqlService } from "@/services/mysql";
 import { normalizeInvKey } from "@/lib/forecast-generator";
-import { MAIN_BRANCH } from "@/lib/packing-list";
+import { isPackingSellableLine, MAIN_BRANCH } from "@/lib/packing-list";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,14 +21,18 @@ const MAX_ORDER_NBRS = 200;
  * Packing List Generator data (read-only, MySQL only).
  *   mode=orders  POs that have lines for the branch (light rows for the pick list)
  *   mode=lines   lines of the chosen POs for that branch, with item dimensions and
- *                available stock in the branch and in MAIN
+ *                available stock in the branch and in MAIN (sellable only — DAMAGE /
+ *                DISCOUNTED warehouses and locations are never included)
  */
 
 function branchLineMatcher(branch) {
     const ids = new Set(
-        [branch, ...getStockWarehouseIdsForBranch(branch)].map((id) => String(id).trim().toUpperCase()).filter(Boolean)
+        [branch, ...getStockWarehouseIdsForBranch(branch)]
+            .map((id) => String(id).trim().toUpperCase())
+            .filter((id) => id && !isExcludedBranchAlias(id))
     );
     return (line) => {
+        if (!isPackingSellableLine(line)) return false;
         const wh = String(line.warehouseId || "").trim().toUpperCase();
         const br = String(line.branchId || "").trim().toUpperCase();
         return (wh && ids.has(wh)) || (br && ids.has(br));
@@ -37,7 +41,7 @@ function branchLineMatcher(branch) {
 
 /** Lines for the branch. Older POs may have no warehouse on the line; the branch filter already matched the PO. */
 function branchLines(lines, inBranch) {
-    const all = lines || [];
+    const all = (lines || []).filter(isPackingSellableLine);
     const mine = all.filter(inBranch);
     return mine.length ? mine : all.filter((l) => !String(l.warehouseId || l.branchId || "").trim());
 }
