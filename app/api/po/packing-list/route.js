@@ -21,8 +21,10 @@ const MAX_ORDER_NBRS = 200;
  * Packing List Generator data (read-only, MySQL only).
  *   mode=orders  POs that have lines for the branch (light rows for the pick list)
  *   mode=lines   lines of the chosen POs for that branch, with item dimensions and
- *                available stock in the branch and in MAIN (sellable only — DAMAGE /
- *                DISCOUNTED warehouses and locations are never included)
+ *                available stock in the branch and in MAIN (sellable only —
+ *                Acumatica Inventory Summary exclusions: SPAREPARTS/DAMAGE/
+ *                DISCOUNTED/EXPIRED/DEMO locations; MAIN WH11/SKYTECH/
+ *                SKYTECHMNL/MNL CAL WH/MNL-TECH/SKY ECOM/TESTING/TECH warehouses)
  */
 
 function branchLineMatcher(branch) {

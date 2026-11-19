@@ -5,7 +5,7 @@ import {
     aggregateBranchGrossSales,
     invoicesToPeriodicSalesRows,
 } from "@/lib/acumatica-sales-aggregate";
-import { isExcludedBranchAlias, isExcludedLocationAlias } from "@/lib/companies";
+import { isDamageLocationAlias, isExcludedBranchAlias, isExcludedLocationAlias } from "@/lib/companies";
 import { busyRetryDelayMs, isAcumaticaUnauthorized } from "@/lib/acumatica-retry";
 import { acumaticaList } from "@/lib/vendor-sync";
 const ACU_BASE = `${process.env.ACUMATICA_BASE_URL}/entity/Default/20.200.001`;
@@ -195,7 +195,7 @@ export function extractDamageLevelsFromSummary(
         const warehouseId = String(getAny(row, "WarehouseID", "SiteID", "Branch") || "").trim();
         const locationId = String(getAny(row, "LocationID", "Location") || "").trim();
         const isDamage =
-            isExcludedBranchAlias(warehouseId) || isExcludedLocationAlias(locationId);
+            isDamageLocationAlias(warehouseId) || isDamageLocationAlias(locationId);
         if (!isDamage) continue;
 
         found = true;
@@ -224,7 +224,7 @@ export function extractDamageLevelsFromSummary(
                         getAny(wh, "WarehouseID")
                 ).trim();
                 const warehouseId = String(getAny(wh, "WarehouseID") || siteId).trim();
-                if (!isExcludedBranchAlias(siteId) && !isExcludedBranchAlias(warehouseId)) {
+                if (!isDamageLocationAlias(siteId) && !isDamageLocationAlias(warehouseId)) {
                     continue;
                 }
                 found = true;
@@ -283,7 +283,7 @@ export function mapSummaryLocations(summaryResults = []) {
         let available = rawAvail === "" || rawAvail == null ? NaN : parseFloat(rawAvail);
         if (Number.isNaN(available)) available = Number.isNaN(onHand) ? 0 : onHand;
         const isDamage =
-            isExcludedBranchAlias(warehouseId) || isExcludedLocationAlias(locationId);
+            isDamageLocationAlias(warehouseId) || isDamageLocationAlias(locationId);
         locations.push({
             warehouseId: warehouseId || "—",
             locationId: locationId || "—",
