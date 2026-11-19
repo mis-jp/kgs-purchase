@@ -484,7 +484,7 @@ export default function PackingListTable({
                     )}
                     {sorted.length > 0 && !stockPlan.isMain && (
                         <div className="pl-note">
-                            Stock is the available qty in {String(branch).toUpperCase()} and in MAIN (non-sellable locations/warehouses left out: SPAREPARTS, DAMAGE, DISCOUNTED, EXPIRED, DEMO, MAIN WH11, SKYTECH, SKYTECHMNL, MNL CAL WH, MNL-TECH, SKY ECOM, TECH, TESTING). Transfer from Main is how much of each line MAIN can send now;
+                            Stock is the available qty in {String(branch).toUpperCase()} and in MAIN (non-sellable locations/warehouses left out: SPAREPARTS, DAMAGE, DISCOUNTED, EXPIRED, DEMO, MAIN WH11, SKYTECH, SKYTECHMNL, MNL CAL WH, MNL-MRILAO/MARILAO, MNL-TECH, SKY ECOM, TECH, TESTING). Transfer from Main is how much of each line MAIN can send now;
                             {stockPlan.shortLines > 0
                                 ? ` ${stockPlan.shortLines} line(s) are short at MAIN by ${qtyText(stockPlan.short)} in total.`
                                 : " MAIN has enough for every line."}

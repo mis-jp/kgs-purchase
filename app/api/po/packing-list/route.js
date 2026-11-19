@@ -23,8 +23,8 @@ const MAX_ORDER_NBRS = 200;
  *   mode=lines   lines of the chosen POs for that branch, with item dimensions and
  *                available stock in the branch and in MAIN (sellable only —
  *                Acumatica Inventory Summary exclusions: SPAREPARTS/DAMAGE/
- *                DISCOUNTED/EXPIRED/DEMO locations; MAIN WH11/SKYTECH/
- *                SKYTECHMNL/MNL CAL WH/MNL-TECH/SKY ECOM/TESTING/TECH warehouses)
+ *                DISCOUNTED/EXPIRED/DEMO/MARILAO locations; MAIN WH11/SKYTECH/
+ *                SKYTECHMNL/MNL CAL WH/MNL-MRILAO/MNL-TECH/SKY ECOM/TESTING/TECH warehouses)
  */
 
 function branchLineMatcher(branch) {

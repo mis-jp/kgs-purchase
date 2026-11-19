@@ -6,7 +6,8 @@ import { isPackingSellableLine } from "../lib/packing-list.js";
 test("Acumatica Inventory Summary exclusions are not packing-list sellable", () => {
     assert.equal(isPackingSellableLine({ warehouseId: "BACOLOD", branchId: "BACOLOD" }), true);
     assert.equal(isPackingSellableLine({ warehouseId: "MAIN", branchId: "" }), true);
-    assert.equal(isPackingSellableLine({ warehouseId: "MNL-MRILAO", branchId: "MANILA" }), true);
+    assert.equal(isPackingSellableLine({ warehouseId: "MNL-MRILAO", branchId: "MANILA" }), false);
+    assert.equal(isPackingSellableLine({ warehouseId: "MARILAO", branchId: "" }), false);
 
     // Location Does Not Contain
     assert.equal(isPackingSellableLine({ warehouseId: "SPAREPARTS", branchId: "" }), false);
@@ -27,9 +28,10 @@ test("Acumatica Inventory Summary exclusions are not packing-list sellable", () 
     // Warehouse Does Not Contain TECH
     assert.equal(isPackingSellableLine({ warehouseId: "FOO-TECH-BAR", branchId: "" }), false);
 
-    // Unchecked filters must remain allowed
+    // MAIN stays allowed
     assert.equal(isExcludedBranchAlias("MAIN"), false);
-    assert.equal(isExcludedBranchAlias("MARILAO"), false);
+    assert.equal(isExcludedBranchAlias("MARILAO"), true);
+    assert.equal(isExcludedBranchAlias("MNL-MRILAO"), true);
     assert.equal(isPackingSellableLine({ warehouseId: "", branchId: "" }), true);
 });
 
@@ -37,10 +39,12 @@ test("branch stock groups drop excluded warehouses from Acumatica filter", () =>
     assert.deepEqual(getStockWarehouseIdsForBranch("DAMAGE"), []);
     assert.deepEqual(getStockWarehouseIdsForBranch("MAIN WH11"), []);
     assert.deepEqual(getStockWarehouseIdsForBranch("MNL-TECH"), []);
+    assert.deepEqual(getStockWarehouseIdsForBranch("MNL-MRILAO"), []);
+    assert.deepEqual(getStockWarehouseIdsForBranch("MARILAO"), []);
     assert.ok(!getStockWarehouseIdsForBranch("MAIN").includes("MAIN WH11"));
     assert.ok(getStockWarehouseIdsForBranch("MAIN").includes("MAIN"));
     assert.ok(!getStockWarehouseIdsForBranch("MANILA").includes("MNL CAL WH"));
+    assert.ok(!getStockWarehouseIdsForBranch("MANILA").includes("MNL-MRILAO"));
     assert.ok(getStockWarehouseIdsForBranch("MANILA").includes("MANILA"));
-    assert.ok(getStockWarehouseIdsForBranch("MANILA").includes("MNL-MRILAO"));
     assert.ok(getStockWarehouseIdsForBranch("BACOLOD").includes("BACOLOD"));
 });
