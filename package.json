@@ -1,6 +1,6 @@
 {
   "name": "acu",
-  "version": "1.2.158",
+  "version": "1.2.159",
   "private": true,
   "scripts": {
     "dev": "next dev --webpack -p 3002",
@@ -10,6 +10,7 @@
     "lint": "eslint",
     "deploy": "npm run build && npm run start:prod",
     "version:bump": "node scripts/bump-version.mjs",
+    "rd:bootstrap": "node scripts/rd-management-bootstrap.mjs",
     "prepare": "node scripts/setup-git-hooks.mjs"
   },
   "dependencies": {
