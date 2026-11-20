@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getStockWarehouseIdsForBranch, isExcludedBranchAlias } from "../lib/companies.js";
+import {
+    getStockWarehouseIdsForBranch,
+    isExcludedBranchAlias,
+    isExcludedLocationAlias,
+} from "../lib/companies.js";
 import { isPackingSellableLine } from "../lib/packing-list.js";
 
 test("Acumatica Inventory Summary exclusions are not packing-list sellable", () => {
@@ -33,6 +37,21 @@ test("Acumatica Inventory Summary exclusions are not packing-list sellable", () 
     assert.equal(isExcludedBranchAlias("MARILAO"), true);
     assert.equal(isExcludedBranchAlias("MNL-MRILAO"), true);
     assert.equal(isPackingSellableLine({ warehouseId: "", branchId: "" }), true);
+});
+
+test("MAIN bin MARILAO 15 is sellable; DAMAGE location is not", () => {
+    assert.equal(isExcludedLocationAlias("MARILAO 15"), false);
+    assert.equal(isExcludedLocationAlias("DAMAGE"), true);
+    assert.equal(isExcludedLocationAlias("DISCOUNTED"), true);
+    assert.equal(isExcludedBranchAlias("MARILAO 15"), false);
+    assert.equal(
+        isPackingSellableLine({ warehouseId: "MAIN", locationId: "MARILAO 15" }),
+        true
+    );
+    assert.equal(
+        isPackingSellableLine({ warehouseId: "MAIN", locationId: "DAMAGE" }),
+        false
+    );
 });
 
 test("branch stock groups drop excluded warehouses from Acumatica filter", () => {
