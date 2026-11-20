@@ -11,6 +11,8 @@ import {
     isUnauthorizedError,
     hasSystemAcumaticaCredentials,
 } from "@/lib/sync-acumatica-auth";
+import { touchSystemCredential } from "@/lib/acumatica-system-auth";
+import { ensureAcumaticaKeepAlive } from "@/lib/acumatica-keepalive";
 import { syncChangedPurchaseOrders } from "@/lib/po-live-sync";
 import mysql from "mysql2/promise";
 
@@ -27,6 +29,8 @@ let syncProgressState = { running: false, progress: 0, section: "", mode: "" };
  */
 export async function POST(request) {
     console.log(">>> [Sync API] Starting MySQL Sync Process");
+    // Keep the Acumatica system session warm so inactivity logout cannot kill auto-sync.
+    ensureAcumaticaKeepAlive();
     const encoder = new TextEncoder();
     const signal = request.signal;
 
@@ -576,8 +580,9 @@ export async function POST(request) {
                 let salesRowsSynced = 0;
                 let poRowsSynced = 0;
 
-                // 1. BRANCHES (Acumatica Branch entity only — not Warehouse)
-                send({ section: "Inventory", details: "Updating branches...", progress: 5 });
+                // 1. BRANCHES — live from Acumatica (Branch entity, or Warehouse when
+                // Branch is not published on this tenant's endpoint).
+                send({ section: "Inventory", details: "Updating branches from Acumatica...", progress: 5 });
                 try {
                     const realBranches = await AcumaticaService.getRealBranches(effectiveCookie);
 
@@ -595,13 +600,28 @@ export async function POST(request) {
                     const branchRows = [...byId.values()];
                     if (branchRows.length > 0) {
                         await MySqlService.replaceMasterBranches(branchRows);
-                        await MySqlService.logSyncEvent(options.mode, "Branches", "completed", branchRows.length);
-                    } else {
-                        console.warn("[Sync API] Branch entity returned no usable rows — keeping existing master list");
+                        const fromWh = realBranches.some((b) => b.source === "warehouse");
                         await MySqlService.logSyncEvent(
                             options.mode,
                             "Branches",
-                            "error",
+                            "completed",
+                            branchRows.length,
+                            fromWh
+                                ? "Synced from live Acumatica Warehouse (Branch entity not on endpoint)"
+                                : null
+                        );
+                        send({
+                            section: "Inventory",
+                            details: `Branches synced from Acumatica (${branchRows.length}).`,
+                            progress: 6,
+                            count: branchRows.length,
+                        });
+                    } else {
+                        console.warn("[Sync API] Acumatica returned no usable branch rows — keeping existing master list");
+                        await MySqlService.logSyncEvent(
+                            options.mode,
+                            "Branches",
+                            "completed",
                             0,
                             "Acumatica returned no active branches (existing list kept)"
                         );
@@ -686,10 +706,20 @@ export async function POST(request) {
                             progress: Math.max(10, Math.min(95, Math.floor((totalSynced || 0) / 30))),
                             count: totalSynced || 0,
                         });
-                        invCookie = await systemLoginForCompany(getAcumaticaCompanyName("main"), {
-                            forceRefresh: true,
-                        });
+                        try {
+                            invCookie = await systemLoginForCompany(getAcumaticaCompanyName("main"), {
+                                forceRefresh: true,
+                            });
+                        } catch (reloginErr) {
+                            // Login limit / transient — keep whatever session we still have.
+                            console.warn(
+                                ">>> [Sync API] Re-login failed; keeping current session:",
+                                reloginErr.message
+                            );
+                            if (!invCookie) throw reloginErr;
+                        }
                         effectiveCookie = invCookie;
+                        touchSystemCredential();
                         console.log(">>> [Sync API] Re-authenticated after Unauthorized");
                         return invCookie;
                     };
@@ -725,6 +755,7 @@ export async function POST(request) {
                                 const data = await res.json();
                                 items = acumaticaList(data);
                                 authRetries = 0;
+                                touchSystemCredential();
                             } catch (fetchErr) {
                                 if (isUnauthorizedError(fetchErr) && authRetries < 3 && hasSystemAcumaticaCredentials()) {
                                     authRetries += 1;
@@ -961,9 +992,17 @@ export async function POST(request) {
                                 details: "Acumatica session expired — signing in again and retrying sales…",
                                 progress: 12,
                             });
-                            effectiveCookie = await systemLoginForCompany(getAcumaticaCompanyName("main"), {
-                                forceRefresh: true,
-                            });
+                            try {
+                                effectiveCookie = await systemLoginForCompany(getAcumaticaCompanyName("main"), {
+                                    forceRefresh: true,
+                                });
+                            } catch (reloginErr) {
+                                console.warn(
+                                    ">>> [Sync API] Sales re-login failed; retrying with current session:",
+                                    reloginErr.message
+                                );
+                            }
+                            touchSystemCredential();
                             salesRows = await runSales(effectiveCookie);
                         }
 

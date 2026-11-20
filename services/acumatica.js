@@ -5,7 +5,12 @@ import {
     aggregateBranchGrossSales,
     invoicesToPeriodicSalesRows,
 } from "@/lib/acumatica-sales-aggregate";
-import { isDamageLocationAlias, isExcludedBranchAlias, isExcludedLocationAlias } from "@/lib/companies";
+import {
+    isDamageLocationAlias,
+    isExcludedBranchAlias,
+    isExcludedLocationAlias,
+    isWarehouseLikeAlias,
+} from "@/lib/companies";
 import { busyRetryDelayMs, isAcumaticaUnauthorized } from "@/lib/acumatica-retry";
 import { acumaticaList } from "@/lib/vendor-sync";
 // acumaticaList: Acumatica sometimes returns a bare array, sometimes { value: [...] }.
@@ -679,8 +684,11 @@ export const AcumaticaService = {
     },
 
     /**
-     * Acumatica Branch entity only.
-     * Does NOT fall back to Warehouse — Branch pickers must never show warehouse sites.
+     * Organizational / retail branches for pickers.
+     * Prefer the Branch entity when the tenant exposes it. This Holocron tenant's
+     * Default endpoint has no Branch entity on any published API version — in that
+     * case we pull live Active Warehouse rows from Acumatica and keep only
+     * sellable retail IDs (exclude damage/tech/satellite WH sites).
      */
     async getRealBranches(cookie) {
         const attempts = [
@@ -732,10 +740,64 @@ export const AcumaticaService = {
             }
         }
 
-        throw new Error(
-            lastError?.message ||
-                "Acumatica Branch entity returned no records (Warehouse fallback disabled)"
+        const message = String(lastError?.message || "");
+        const entityMissing = /Entity Branch not found|entity ['"]?Branch['"]? (was )?not found/i.test(
+            message
         );
+        if (!entityMissing && lastError) {
+            throw lastError;
+        }
+
+        // Real Acumatica master on this tenant: Warehouse (Branch entity does not exist).
+        console.warn(
+            "[Acumatica] Branch entity not on endpoint — loading live Active Warehouse list from Acumatica"
+        );
+        const fromWarehouses = await this.getRetailBranchesFromWarehouses(cookie);
+        if (fromWarehouses.length > 0) {
+            console.log(
+                `[Acumatica] Loaded ${fromWarehouses.length} retail branch(es) from live Warehouse API`
+            );
+            return fromWarehouses;
+        }
+
+        const err = new Error(
+            message || "Acumatica Branch entity missing and Warehouse returned no retail sites"
+        );
+        err.code = "BRANCH_ENTITY_MISSING";
+        throw err;
+    },
+
+    /**
+     * Live Acumatica Warehouse → retail branch list (Active only, exclusions applied).
+     * Filter by Warehouse ID only — descriptions often contain the word "WAREHOUSE".
+     */
+    async getRetailBranchesFromWarehouses(cookie) {
+        const url = `${ACU_BASE}/Warehouse?$select=WarehouseID,Description,Active&$top=500`;
+        const res = await this.fetchWithRetry(url, cookie);
+        const raw = acumaticaList(await res.json());
+        const mapped = [];
+        for (const w of raw) {
+            const id = String(getAny(w, "WarehouseID", "SiteID") || "").trim();
+            if (!id) continue;
+            const activeRaw = getAny(w, "Active");
+            const activeVal =
+                activeRaw && typeof activeRaw === "object" && "value" in activeRaw
+                    ? activeRaw.value
+                    : activeRaw;
+            if (activeVal !== "" && activeVal !== null && activeVal !== undefined) {
+                const active =
+                    activeVal === true ||
+                    activeVal === "true" ||
+                    activeVal === 1 ||
+                    activeVal === "1";
+                if (!active) continue;
+            }
+            if (isExcludedBranchAlias(id)) continue;
+            if (isWarehouseLikeAlias(id)) continue;
+            const name = String(getAny(w, "Description", "WarehouseID") || id).trim() || id;
+            mapped.push({ BranchID: id, Description: name, source: "warehouse" });
+        }
+        return mapped.sort((a, b) => a.BranchID.localeCompare(b.BranchID));
     },
 
     async getStockItems({ page = 1, pageSize = 50, search = "", branch = "", cookie, includeStats = false, includeCount = false }) {

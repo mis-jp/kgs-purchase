@@ -4,6 +4,7 @@ import { getAcumaticaBusyUntil } from "@/services/acumatica";
 import { requireAdmin } from "@/lib/app-users";
 import { canSeeSyncAlerts } from "@/lib/sync-alert-access";
 import { getBackgroundJobStatus } from "@/lib/background-jobs";
+import { ensureAcumaticaKeepAlive, getAcumaticaKeepAliveStatus } from "@/lib/acumatica-keepalive";
 import { buildSyncAlerts, describeFreshness, summarizeSyncLogs } from "@/lib/sync-status";
 
 export const runtime = "nodejs";
@@ -41,6 +42,8 @@ export async function GET(request) {
         ];
         const sections = summarizeSyncLogs(logs);
         const jobs = getBackgroundJobStatus();
+        ensureAcumaticaKeepAlive();
+        const keepAlive = getAcumaticaKeepAliveStatus();
         const alerts = showAlerts ? buildSyncAlerts({ sections, jobs: jobs.jobs, freshness }) : [];
 
         if (alertsOnly) {
@@ -56,6 +59,7 @@ export async function GET(request) {
             acumatica: {
                 busy: busyUntil > now,
                 busyUntil: busyUntil > now ? new Date(busyUntil).toISOString() : null,
+                keepAlive,
             },
         }, NO_STORE);
     } catch (err) {

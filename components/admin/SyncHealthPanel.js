@@ -97,6 +97,20 @@ export default function SyncHealthPanel() {
                         </div>
                     )}
 
+                    {data.acumatica?.keepAlive?.enabled && (
+                        <p className="admin-header-hint">
+                            Acumatica keep-alive{" "}
+                            {data.acumatica.keepAlive.started ? "is running" : "will start on the next sync"}
+                            {data.acumatica.keepAlive.lastOkAt
+                                ? ` — last warm ping ${formatWhen(data.acumatica.keepAlive.lastOkAt)}`
+                                : ""}
+                            {data.acumatica.keepAlive.lastError
+                                ? ` — last issue: ${data.acumatica.keepAlive.lastError}`
+                                : ""}
+                            .
+                        </p>
+                    )}
+
                     {data.alerts?.length > 0 && (
                         <div className="sync-health-alerts" role="alert">
                             <strong>

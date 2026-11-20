@@ -9,7 +9,11 @@ export async function GET(request) {
     const sessionId = getSessionIdFromRequest(request);
     const cookie = getSessionFromRequest(request);
 
-    if (cookie) await AuthService.logout(cookie).catch(() => {});
+    // End the user's Acumatica cookie only — never clear the shared system
+    // sync session (that must stay logged in across user logouts / restarts).
+    if (cookie && cookie !== "__bypass__") {
+        await AuthService.logout(cookie).catch(() => {});
+    }
     if (sessionId) {
         deleteSession(sessionId);
         await removePersistedAppSession(sessionId);

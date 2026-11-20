@@ -38,6 +38,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# persisted local runtime state (Acumatica system session, etc.)
+.data/
+
 # vercel
 .vercel
 

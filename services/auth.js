@@ -152,8 +152,10 @@ export const AuthService = {
         }
 
         const { apiBase } = authUrls();
-        // Tiny read — validates the Acumatica session without pulling business data
-        const url = `${apiBase}/entity/Default/20.200.001/Branch?$top=1&$select=BranchID`;
+        // Tiny read — validates the Acumatica session without pulling business data.
+        // Prefer StockItem (always present) over Branch — some tenants return
+        // "Entity Branch not found" even with a valid cookie.
+        const url = `${apiBase}/entity/Default/20.200.001/StockItem?$top=1&$select=InventoryID`;
 
         const headers = { ...COMMON_HEADERS };
         if (typeof credential === "string" && credential.startsWith("__bearer__")) {

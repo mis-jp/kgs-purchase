@@ -36,6 +36,21 @@ test("buildSyncAlerts raises repeated failures and stale data only", () => {
     assert.deepEqual(buildSyncAlerts({}), []);
 });
 
+test("buildSyncAlerts ignores known missing Branch entity on this tenant", () => {
+    const alerts = buildSyncAlerts({
+        sections: [
+            {
+                section: "Branches",
+                consecutiveErrors: 13,
+                lastError: "Entity Branch not found (from https://example/Branch?$top=500)",
+                lastSuccessAt: "2026-11-20T00:40:30.000Z",
+            },
+            { section: "Sales", consecutiveErrors: 3, lastError: "timeout" },
+        ],
+    });
+    assert.deepEqual(alerts.map((a) => a.key), ["section:Sales"]);
+});
+
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse("2026-11-04T08:00:00Z");
 
