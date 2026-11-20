@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPool, type RowDataPacket } from "./db";
 import { ensureRdReady } from "./schema";
-import type { Priority, RdSessionUser, TaskStatus } from "./types";
+import type { Priority, RdSessionUser, SqlParam, TaskStatus } from "./types";
 import { nextTaskKey } from "./users";
 
 type TaskRow = RowDataPacket & Record<string, unknown>;
@@ -120,7 +120,7 @@ export async function listTasks(opts: {
   await ensureRdReady();
   const pool = getPool();
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: SqlParam[] = [];
 
   if (!opts.includeArchived) where.push("t.is_archived = 0");
   if (opts.status) {
@@ -292,8 +292,8 @@ export async function updateTask(
   }
 
   const fields: string[] = [];
-  const params: unknown[] = [];
-  const set = (col: string, val: unknown) => {
+  const params: SqlParam[] = [];
+  const set = (col: string, val: SqlParam) => {
     fields.push(`${col} = ?`);
     params.push(val);
   };

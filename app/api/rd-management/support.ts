@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPool, type RowDataPacket } from "./db";
 import { ensureRdReady } from "./schema";
-import type { RdSessionUser } from "./types";
+import type { RdSessionUser, SqlParam } from "./types";
 
 export async function listTags() {
   await ensureRdReady();
@@ -109,7 +109,7 @@ export async function listActivity(opts: {
   await ensureRdReady();
   const pool = getPool();
   const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
-  const params: unknown[] = [];
+  const params: SqlParam[] = [];
   let where = "";
   if (opts.taskId) {
     where = "WHERE a.task_id = ?";

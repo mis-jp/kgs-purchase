@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { hashPassword, mapUser } from "./auth";
 import { getPool, type RowDataPacket } from "./db";
 import { ensureRdReady } from "./schema";
-import type { RdRole, RdSessionUser, RdUser } from "./types";
+import type { RdRole, RdSessionUser, RdUser, SqlParam } from "./types";
 
 export async function listUsers(opts: {
   q?: string;
@@ -12,7 +12,7 @@ export async function listUsers(opts: {
   await ensureRdReady();
   const pool = getPool();
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: SqlParam[] = [];
 
   if (opts.activeOnly) where.push("is_active = 1");
   if (opts.role === "ADMIN" || opts.role === "EMPLOYEE") {
@@ -123,9 +123,9 @@ export async function updateUser(
   }
 
   const fields: string[] = [];
-  const params: unknown[] = [];
+  const params: SqlParam[] = [];
 
-  const setStr = (col: string, val: unknown) => {
+  const setStr = (col: string, val: SqlParam) => {
     fields.push(`${col} = ?`);
     params.push(val);
   };

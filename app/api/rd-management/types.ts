@@ -33,3 +33,6 @@ export type TaskStatus =
   | "CANCELLED";
 
 export type Priority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
+
+/** Values accepted by mysql2 pool.execute bindings. */
+export type SqlParam = string | number | boolean | Date | Buffer | null;
