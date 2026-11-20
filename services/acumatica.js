@@ -8,6 +8,7 @@ import {
 import { isDamageLocationAlias, isExcludedBranchAlias, isExcludedLocationAlias } from "@/lib/companies";
 import { busyRetryDelayMs, isAcumaticaUnauthorized } from "@/lib/acumatica-retry";
 import { acumaticaList } from "@/lib/vendor-sync";
+// acumaticaList: Acumatica sometimes returns a bare array, sometimes { value: [...] }.
 const ACU_BASE = `${process.env.ACUMATICA_BASE_URL}/entity/Default/20.200.001`;
 
 // Bypasses 'CERT_HAS_EXPIRED' error for Acumatica connections
@@ -694,18 +695,23 @@ export const AcumaticaService = {
             try {
                 const res = await this.fetchWithRetry(url, cookie);
                 const data = await res.json();
-                const raw = data.value || (Array.isArray(data) ? data : []);
+                const raw = acumaticaList(data);
                 const mapped = raw
                     .map((b) => {
                         const id = String(getAny(b, "BranchID", "Branch") || "").trim();
                         if (!id) return null;
                         const activeRaw = getAny(b, "Active");
-                        if (activeRaw !== "" && activeRaw !== null && activeRaw !== undefined) {
+                        // Active may be a bare bool or Acumatica { value: true }
+                        const activeVal =
+                            activeRaw && typeof activeRaw === "object" && "value" in activeRaw
+                                ? activeRaw.value
+                                : activeRaw;
+                        if (activeVal !== "" && activeVal !== null && activeVal !== undefined) {
                             const active =
-                                activeRaw === true ||
-                                activeRaw === "true" ||
-                                activeRaw === 1 ||
-                                activeRaw === "1";
+                                activeVal === true ||
+                                activeVal === "true" ||
+                                activeVal === 1 ||
+                                activeVal === "1";
                             if (!active) return null;
                         }
                         const name = String(
@@ -719,6 +725,7 @@ export const AcumaticaService = {
                     console.log(`[Acumatica] Loaded ${mapped.length} Branch record(s)`);
                     return mapped;
                 }
+                console.warn(`[Acumatica] Branch URL returned ${raw.length} row(s) but none mapped: ${url}`);
             } catch (err) {
                 lastError = err;
                 console.warn(`[Acumatica] Branch fetch attempt failed: ${err.message}`);

@@ -81,6 +81,7 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
     const [linesCache, setLinesCache] = useState({});
     const [linesError, setLinesError] = useState({ key: "", message: "" });
     const [linesTick, setLinesTick] = useState(0);
+    const [inventoryLastSync, setInventoryLastSync] = useState(null);
 
     const [manual, setManual] = useState(readManual);
     const [truckingFee, setTruckingFee] = useState(readTruckingFee);
@@ -181,6 +182,7 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
                         if (byOrder[k]) byOrder[k].push(line);
                     }
                     if (controller.signal.aborted) return;
+                    if (data.inventoryLastSync) setInventoryLastSync(data.inventoryLastSync);
                     setLinesCache((prev) => ({ ...prev, ...byOrder }));
                 }
             } catch (err) {
@@ -380,6 +382,7 @@ export default function PackingListGenerator({ branchOptions = [], allowAllBranc
                         onClearManual={clearManual}
                         truckingFee={truckingFee}
                         onTruckingFeeChange={changeTruckingFee}
+                        inventoryLastSync={inventoryLastSync}
                     />
                 </div>
             )}

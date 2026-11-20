@@ -579,10 +579,7 @@ export async function POST(request) {
                 // 1. BRANCHES (Acumatica Branch entity only — not Warehouse)
                 send({ section: "Inventory", details: "Updating branches...", progress: 5 });
                 try {
-                    const realBranches = await AcumaticaService.getRealBranches(effectiveCookie).catch((e) => {
-                        console.warn("[Sync API] getRealBranches:", e.message);
-                        return [];
-                    });
+                    const realBranches = await AcumaticaService.getRealBranches(effectiveCookie);
 
                     const byId = new Map();
                     for (const b of realBranches) {
@@ -598,9 +595,19 @@ export async function POST(request) {
                     const branchRows = [...byId.values()];
                     if (branchRows.length > 0) {
                         await MySqlService.replaceMasterBranches(branchRows);
+                        await MySqlService.logSyncEvent(options.mode, "Branches", "completed", branchRows.length);
+                    } else {
+                        console.warn("[Sync API] Branch entity returned no usable rows — keeping existing master list");
+                        await MySqlService.logSyncEvent(
+                            options.mode,
+                            "Branches",
+                            "error",
+                            0,
+                            "Acumatica returned no active branches (existing list kept)"
+                        );
                     }
-                    await MySqlService.logSyncEvent(options.mode, "Branches", "completed", branchRows.length);
                 } catch (e) {
+                    console.warn("[Sync API] getRealBranches:", e.message);
                     await MySqlService.logSyncEvent(options.mode, "Branches", "error", 0, e.message);
                 }
 
@@ -716,7 +723,7 @@ export async function POST(request) {
                                 const url = `${ACU_BASE}/StockItem?$expand=WarehouseDetails&$top=${top}&$skip=${skip}${filterStr}`;
                                 const res = await AcumaticaService.fetchWithRetry(url, invCookie);
                                 const data = await res.json();
-                                items = data.value || (Array.isArray(data) ? data : []);
+                                items = acumaticaList(data);
                                 authRetries = 0;
                             } catch (fetchErr) {
                                 if (isUnauthorizedError(fetchErr) && authRetries < 3 && hasSystemAcumaticaCredentials()) {
@@ -858,9 +865,35 @@ export async function POST(request) {
                         await MySqlService.sanitizeCatalogStockFields("main").catch(() => 0);
                         await MySqlService.sanitizeCatalogStockFields("ecommerce").catch(() => 0);
 
-                        await MySqlService.logSyncEvent(options.mode, "Inventory", "completed", totalSynced, `${totalLevelsSynced} stock rows`);
-                        inventoryRowsSynced = totalLevelsSynced || totalSynced;
-                        send({ section: "Inventory", status: "done", details: `Inventory sync complete (${totalLevelsSynced} stock rows).`, progress: 100 });
+                        // Empty full sync usually means Acumatica auth/network failed on page 1 —
+                        // do not report that as a healthy completed refresh.
+                        if (!isDelta && totalSynced === 0 && totalLevelsSynced === 0) {
+                            const emptyMsg =
+                                "Inventory sync returned 0 items from Acumatica (auth or network). Existing stock kept.";
+                            console.warn(`>>> [Sync API] ${emptyMsg}`);
+                            await MySqlService.logSyncEvent(options.mode, "Inventory", "error", 0, emptyMsg);
+                            send({
+                                section: "Inventory",
+                                status: "error",
+                                details: emptyMsg,
+                                progress: 0,
+                            });
+                        } else {
+                            await MySqlService.logSyncEvent(
+                                options.mode,
+                                "Inventory",
+                                "completed",
+                                totalSynced,
+                                `${totalLevelsSynced} stock rows`
+                            );
+                            inventoryRowsSynced = totalLevelsSynced || totalSynced;
+                            send({
+                                section: "Inventory",
+                                status: "done",
+                                details: `Inventory sync complete (${totalLevelsSynced} stock rows).`,
+                                progress: 100,
+                            });
+                        }
                     }
                   } catch (invErr) {
                     console.error(">>> [Sync API] Inventory sync error:", invErr.message);

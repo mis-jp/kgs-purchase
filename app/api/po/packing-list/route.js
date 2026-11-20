@@ -126,9 +126,10 @@ async function listLines(sp, branch, companyId) {
         Object.assign(dims, await MySqlService.getItemDimensionsBatch(ids.slice(i, i + 200)));
     }
     const isMain = branch.toUpperCase() === MAIN_BRANCH;
-    const [branchStock, mainStock] = await Promise.all([
+    const [branchStock, mainStock, inventoryLastSync] = await Promise.all([
         MySqlService.getBranchOnHandForItems(ids, { branch, companyId }),
         isMain ? null : MySqlService.getBranchOnHandForItems(ids, { branch: MAIN_BRANCH, companyId: "main" }),
+        MySqlService.getLastInventorySyncTime().catch(() => null),
     ]);
     for (const line of lines) {
         const key = String(line.inventoryId || "").trim();
@@ -137,7 +138,12 @@ async function listLines(sp, branch, companyId) {
         line.branchStock = branchStock.get(stockKey) ?? 0;
         line.mainStock = isMain ? line.branchStock : (mainStock.get(stockKey) ?? 0);
     }
-    return { lines };
+    return {
+        lines,
+        inventoryLastSync: inventoryLastSync
+            ? new Date(inventoryLastSync).toISOString()
+            : null,
+    };
 }
 
 export async function GET(request) {

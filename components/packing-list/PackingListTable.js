@@ -211,6 +211,7 @@ export default function PackingListTable({
     onClearManual,
     truckingFee = "",
     onTruckingFeeChange,
+    inventoryLastSync = null,
 }) {
     const [exporting, setExporting] = useState(false);
     const [exportError, setExportError] = useState("");
@@ -482,12 +483,20 @@ export default function PackingListTable({
                             </table>
                         </div>
                     )}
-                    {sorted.length > 0 && !stockPlan.isMain && (
+                    {sorted.length > 0 && (
                         <div className="pl-note">
-                            Stock is the available qty in {String(branch).toUpperCase()} and in MAIN (non-sellable locations/warehouses left out: SPAREPARTS, DAMAGE, DISCOUNTED, EXPIRED, DEMO, MAIN WH11, SKYTECH, SKYTECHMNL, MNL CAL WH, MNL-MRILAO/MARILAO, MNL-TECH, SKY ECOM, TECH, TESTING). Transfer from Main is how much of each line MAIN can send now;
-                            {stockPlan.shortLines > 0
-                                ? ` ${stockPlan.shortLines} line(s) are short at MAIN by ${qtyText(stockPlan.short)} in total.`
-                                : " MAIN has enough for every line."}
+                            Stock comes from the last Inventory sync
+                            {inventoryLastSync
+                                ? ` (${formatDate(inventoryLastSync)} ${new Date(inventoryLastSync).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })})`
+                                : ""}
+                            — run Syncing Center → Inventory if Acumatica changed after that.
+                            {!stockPlan.isMain
+                                ? ` Shown qty is sellable stock in ${String(branch).toUpperCase()} and MAIN only (SPAREPARTS, DAMAGE, DISCOUNTED, EXPIRED, DEMO, MAIN WH11, SKYTECH, SKYTECHMNL, MNL CAL WH, MARILAO, MNL-TECH, SKY ECOM, TECH, TESTING left out).`
+                                : " Shown qty is sellable MAIN stock only (non-sellable locations/warehouses left out)."}
+                            {!stockPlan.isMain &&
+                                (stockPlan.shortLines > 0
+                                    ? ` ${stockPlan.shortLines} line(s) are short at MAIN by ${qtyText(stockPlan.short)} in total.`
+                                    : " MAIN has enough for every line.")}
                         </div>
                     )}
                     {totals.oversize > 0 && (
