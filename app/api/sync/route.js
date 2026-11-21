@@ -21,7 +21,48 @@ export const dynamic = "force-dynamic";
 
 /** Prevent overlapping syncs in this Node process (manual + auto-sync). */
 let syncInProgress = false;
+let syncStartedAt = 0;
+let syncLastActivityAt = 0;
 let syncProgressState = { running: false, progress: 0, section: "", mode: "" };
+
+/** If a sync dies mid-flight (MySQL hang / client disconnect), free the lock. */
+const SYNC_STALE_MS = 10 * 60 * 1000;
+const SYNC_MAX_MS = 45 * 60 * 1000;
+
+function touchSyncActivity() {
+    syncLastActivityAt = Date.now();
+}
+
+function clearSyncLock(reason = "") {
+    if (syncInProgress && reason) {
+        console.warn(`>>> [Sync API] Clearing sync lock (${reason})`);
+    }
+    syncInProgress = false;
+    syncStartedAt = 0;
+    syncLastActivityAt = 0;
+    syncProgressState = { running: false, progress: 0, section: "", mode: "" };
+}
+
+function isSyncLockStale(now = Date.now()) {
+    if (!syncInProgress) return false;
+    if (syncStartedAt && now - syncStartedAt > SYNC_MAX_MS) return true;
+    if (syncLastActivityAt && now - syncLastActivityAt > SYNC_STALE_MS) return true;
+    return false;
+}
+
+function claimSyncLock() {
+    if (syncInProgress && isSyncLockStale()) {
+        clearSyncLock(
+            `stale after ${Math.round((Date.now() - (syncLastActivityAt || syncStartedAt)) / 1000)}s idle`
+        );
+    }
+    if (syncInProgress) return false;
+    syncInProgress = true;
+    syncStartedAt = Date.now();
+    touchSyncActivity();
+    syncProgressState = { running: true, progress: 2, section: "Starting", mode: "" };
+    return true;
+}
 
 /**
  * BFF API Route for Data Synchronization
@@ -38,17 +79,27 @@ export async function POST(request) {
     const sessionId = getSessionIdFromRequest(request);
     const syncSecret = request.headers.get("x-sync-secret");
     const isSecretValid = process.env.SYNC_SECRET && syncSecret === process.env.SYNC_SECRET;
+    const { searchParams: earlyParams } = new URL(request.url);
+    const forceUnlock = earlyParams.get("force") === "1";
 
     if (!cookie && !isSecretValid) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
 
-    if (syncInProgress) {
+    // Authenticated users / secret can clear a stuck lock before claiming.
+    if (forceUnlock && (cookie || isSecretValid)) {
+        clearSyncLock("force=1");
+    }
+
+    if (!claimSyncLock()) {
         return NextResponse.json(
-            { message: "A synchronization is already in progress. Try again shortly." },
+            {
+                message: "A synchronization is already in progress. Try again shortly.",
+                running: true,
+                section: syncProgressState.section || "",
+                startedAt: syncStartedAt ? new Date(syncStartedAt).toISOString() : null,
+            },
             { status: 409 }
         );
     }
-    syncInProgress = true;
-    syncProgressState = { running: true, progress: 2, section: "Starting", mode: "" };
 
     let effectiveCookie = cookie;
     // Prefer a fresh system login for long syncs (user OAuth tokens expire mid-run)
@@ -70,7 +121,7 @@ export async function POST(request) {
     } catch (loginErr) {
         console.error(">>> [Sync API] Credential bootstrap failed:", loginErr.message);
         if (isSecretValid && !cookie) {
-            syncInProgress = false;
+            clearSyncLock("system login failed");
             return NextResponse.json({ message: "System login failed" }, { status: 500 });
         }
     }
@@ -79,7 +130,7 @@ export async function POST(request) {
     if (effectiveCookie === "__bypass__") effectiveCookie = null;
 
     if (!effectiveCookie && !isSecretValid && !hasSystemAcumaticaCredentials()) {
-        syncInProgress = false;
+        clearSyncLock("no acumatica credentials");
         return NextResponse.json({
             message:
                 "Synchronization needs Acumatica system credentials in the server environment (ACUMATICA_USERNAME / ACUMATICA_PASSWORD). Local app login alone cannot call Acumatica.",
@@ -420,8 +471,10 @@ export async function POST(request) {
 
     const stream = new ReadableStream({
         async start(controller) {
+            let finished = false;
             const send = (data) => {
-                if (signal.aborted) return;
+                if (signal.aborted || finished) return;
+                touchSyncActivity();
                 if (data && !data.ping) {
                     const p = Number(data.progress);
                     syncProgressState = {
@@ -433,20 +486,29 @@ export async function POST(request) {
                         mode: options.mode || "incremental",
                     };
                 }
-                controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
+                try {
+                    controller.enqueue(encoder.encode(JSON.stringify(data) + "\n"));
+                } catch {
+                    /* client gone */
+                }
             };
 
             const keepAlive = setInterval(() => {
-                if (!signal.aborted) {
+                if (!signal.aborted && !finished) {
+                    touchSyncActivity();
                     try { controller.enqueue(encoder.encode(JSON.stringify({ ping: true }) + "\n")); } catch { }
                 }
             }, 15000);
-            const finish = () => {
+            const finish = (reason = "done") => {
+                if (finished) return;
+                finished = true;
                 clearInterval(keepAlive);
-                syncInProgress = false;
-                syncProgressState = { running: false, progress: 0, section: "", mode: "" };
-                controller.close();
+                signal.removeEventListener?.("abort", onAbort);
+                clearSyncLock(reason === "done" ? "" : reason);
+                try { controller.close(); } catch { /* already closed */ }
             };
+            const onAbort = () => finish("client aborted / disconnected");
+            signal.addEventListener?.("abort", onAbort);
 
             const getF = (obj, keyName) => {
                 if (!obj) return "";
@@ -1185,12 +1247,19 @@ export async function POST(request) {
 
                 await MySqlService.logSyncEvent(options.mode, "All", "completed", 0, "Sync finished successfully");
                 send({ status: "complete", message: "Sync completed successfully" });
-                finish();
+                finish("done");
             } catch (err) {
                 console.error(">>> [Sync Error]", err);
-                await MySqlService.logSyncEvent(options.mode, "All", "error", 0, err.message);
+                try {
+                    await MySqlService.logSyncEvent(options.mode, "All", "error", 0, err.message);
+                } catch {
+                    /* ignore log failure while unlocking */
+                }
                 send({ status: "error", message: err?.message || String(err) || "An unknown sync error occurred" });
-                finish();
+                finish(err?.message || "sync error");
+            } finally {
+                // Always free the lock even if MySQL hung then recovered, or send() threw.
+                finish("stream finally");
             }
         }
     });
@@ -1208,12 +1277,24 @@ export async function GET(request) {
 
         const { searchParams } = new URL(request.url);
         if (searchParams.get("status") === "1") {
+            if (isSyncLockStale()) {
+                clearSyncLock("stale on status poll");
+            }
             return Response.json({
                 running: Boolean(syncInProgress),
                 progress: Number(syncProgressState.progress) || 0,
                 section: syncProgressState.section || "",
                 mode: syncProgressState.mode || "",
+                startedAt: syncStartedAt ? new Date(syncStartedAt).toISOString() : null,
+                lastActivityAt: syncLastActivityAt
+                    ? new Date(syncLastActivityAt).toISOString()
+                    : null,
+                stale: false,
             });
+        }
+        if (searchParams.get("unlock") === "1") {
+            clearSyncLock("manual unlock");
+            return Response.json({ ok: true, running: false, message: "Sync lock cleared." });
         }
 
         const limit = parseInt(searchParams.get("limit") || "20");

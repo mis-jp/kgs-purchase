@@ -282,6 +282,14 @@ export default function SyncingClient() {
                 if (freed) {
                     addLog("Previous sync finished. Retrying now...");
                     res = await fetch(`/api/sync?${queryParams.toString()}`, { method: "POST" });
+                } else {
+                    // Stuck lock (hung MySQL / disconnected client) — force-clear and retry once.
+                    addLog("Previous sync looks stuck. Clearing the lock and retrying…");
+                    await fetch("/api/sync?unlock=1", { cache: "no-store" }).catch(() => {});
+                    res = await fetch(
+                        `/api/sync?${queryParams.toString()}&force=1`,
+                        { method: "POST" }
+                    );
                 }
             }
             if (!res.ok) {
