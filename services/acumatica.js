@@ -549,6 +549,18 @@ export const AcumaticaService = {
                 await new Promise((r) => setTimeout(r, 1500 * attempts));
             }
         }
+        if (lastError && !isAcumaticaUnauthorized(lastError)) {
+            const code = lastError?.cause?.code || lastError?.code || "";
+            const transient =
+                /ENOTFOUND|ENETUNREACH|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|fetch failed|Connect Timeout/i.test(
+                    `${code} ${lastError?.message || ""}`
+                );
+            if (transient) {
+                throw new Error(
+                    `Cannot reach Acumatica (${code || lastError.message}). Check network/VPN — this is not a password error.`
+                );
+            }
+        }
         throw lastError;
     },
 

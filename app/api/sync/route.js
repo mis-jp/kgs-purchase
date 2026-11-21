@@ -11,7 +11,7 @@ import {
     isUnauthorizedError,
     hasSystemAcumaticaCredentials,
 } from "@/lib/sync-acumatica-auth";
-import { touchSystemCredential } from "@/lib/acumatica-system-auth";
+import { clearSystemCredential, touchSystemCredential } from "@/lib/acumatica-system-auth";
 import { ensureAcumaticaKeepAlive } from "@/lib/acumatica-keepalive";
 import { syncChangedPurchaseOrders } from "@/lib/po-live-sync";
 import mysql from "mysql2/promise";
@@ -768,17 +768,19 @@ export async function POST(request) {
                             progress: Math.max(10, Math.min(95, Math.floor((totalSynced || 0) / 30))),
                             count: totalSynced || 0,
                         });
+                        // Drop the dead cookie so forceRefresh cannot hand it back.
+                        clearSystemCredential();
+                        invCookie = null;
                         try {
                             invCookie = await systemLoginForCompany(getAcumaticaCompanyName("main"), {
                                 forceRefresh: true,
                             });
                         } catch (reloginErr) {
-                            // Login limit / transient — keep whatever session we still have.
                             console.warn(
-                                ">>> [Sync API] Re-login failed; keeping current session:",
+                                ">>> [Sync API] Re-login failed:",
                                 reloginErr.message
                             );
-                            if (!invCookie) throw reloginErr;
+                            throw reloginErr;
                         }
                         effectiveCookie = invCookie;
                         touchSystemCredential();
@@ -1054,15 +1056,17 @@ export async function POST(request) {
                                 details: "Acumatica session expired — signing in again and retrying sales…",
                                 progress: 12,
                             });
+                            clearSystemCredential();
                             try {
                                 effectiveCookie = await systemLoginForCompany(getAcumaticaCompanyName("main"), {
                                     forceRefresh: true,
                                 });
                             } catch (reloginErr) {
                                 console.warn(
-                                    ">>> [Sync API] Sales re-login failed; retrying with current session:",
+                                    ">>> [Sync API] Sales re-login failed:",
                                     reloginErr.message
                                 );
+                                throw reloginErr;
                             }
                             touchSystemCredential();
                             salesRows = await runSales(effectiveCookie);
