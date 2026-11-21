@@ -23,6 +23,7 @@ import {
     sqlExcludeEcomSalesBranches,
     sqlOnlyEcomSalesBranches,
     getStockWarehouseIdsForBranch,
+    getPoDestinationIdsForBranch,
     resolveSalesBranchForWarehouse,
     EXCLUDED_BRANCH_KEYWORDS,
 } from "@/lib/companies.js";
@@ -716,9 +717,11 @@ export const MySqlService = {
             }
 
             if (branch) {
-                // Match Acumatica Branch + related warehouse destinations (e.g. MAIN → MAIN WH11).
+                // Match Acumatica Branch + related warehouse destinations (e.g. MANILA → MNL-MRILAO).
+                // Use PO destinations (full group), not sellable-stock IDs — Marilao is a valid
+                // Manila PO dest even though its warehouse stock is excluded from replenishment.
                 // COLLATE required: purchase_history is utf8mb4_0900_ai_ci, dest/details are unicode_ci.
-                const destinations = getStockWarehouseIdsForBranch(branch);
+                const destinations = getPoDestinationIdsForBranch(branch);
                 const ids = (destinations.length ? destinations : [String(branch).trim().toUpperCase()])
                     .map((id) => String(id).trim().toUpperCase())
                     .filter(Boolean);

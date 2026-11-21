@@ -6,7 +6,7 @@ import {
     getRequestBranchAccess,
     hasNoBranchAccess,
 } from "@/lib/branch-access";
-import { getStockWarehouseIdsForBranch, isExcludedBranchAlias } from "@/lib/companies";
+import { getPoDestinationIdsForBranch } from "@/lib/companies";
 import { MySqlService } from "@/services/mysql";
 import { normalizeInvKey } from "@/lib/forecast-generator";
 import { isPackingSellableLine, MAIN_BRANCH } from "@/lib/packing-list";
@@ -21,18 +21,15 @@ const MAX_ORDER_NBRS = 200;
  * Packing List Generator data (read-only, MySQL only).
  *   mode=orders  POs that have lines for the branch (light rows for the pick list)
  *   mode=lines   lines of the chosen POs for that branch, with item dimensions and
- *                available stock in the branch and in MAIN (sellable only —
- *                Acumatica Inventory Summary exclusions: SPAREPARTS/DAMAGE/
- *                DISCOUNTED/EXPIRED/DEMO locations; MAIN WH11/SKYTECH/
- *                SKYTECHMNL/MNL CAL WH/MARILAO/MNL-MRILAO/MNL-TECH/SKY ECOM/TESTING/TECH warehouses;
- *                MAIN bin MARILAO 15 stays sellable)
+ *                available stock in the branch and in MAIN (sellable stock only —
+ *                Marilao / MAIN WH11 etc. stay valid PO destinations for Manila/MAIN)
  */
 
 function branchLineMatcher(branch) {
     const ids = new Set(
-        [branch, ...getStockWarehouseIdsForBranch(branch)]
+        getPoDestinationIdsForBranch(branch)
             .map((id) => String(id).trim().toUpperCase())
-            .filter((id) => id && !isExcludedBranchAlias(id))
+            .filter(Boolean)
     );
     return (line) => {
         if (!isPackingSellableLine(line)) return false;

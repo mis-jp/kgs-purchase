@@ -2,37 +2,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     getStockWarehouseIdsForBranch,
+    getPoDestinationIdsForBranch,
     isExcludedBranchAlias,
     isExcludedLocationAlias,
 } from "../lib/companies.js";
 import { isPackingSellableLine } from "../lib/packing-list.js";
 
-test("Acumatica Inventory Summary exclusions are not packing-list sellable", () => {
+test("junk / tech sites are not packing-list sellable; related metro dests are", () => {
     assert.equal(isPackingSellableLine({ warehouseId: "BACOLOD", branchId: "BACOLOD" }), true);
     assert.equal(isPackingSellableLine({ warehouseId: "MAIN", branchId: "" }), true);
-    assert.equal(isPackingSellableLine({ warehouseId: "MNL-MRILAO", branchId: "MANILA" }), false);
-    assert.equal(isPackingSellableLine({ warehouseId: "MARILAO", branchId: "" }), false);
+    // Manila / MAIN POs often land on related warehouses — keep them on the packing list
+    assert.equal(isPackingSellableLine({ warehouseId: "MNL-MRILAO", branchId: "MANILA" }), true);
+    assert.equal(isPackingSellableLine({ warehouseId: "MARILAO", branchId: "" }), true);
+    assert.equal(isPackingSellableLine({ warehouseId: "MNL CAL WH", branchId: "" }), true);
+    assert.equal(isPackingSellableLine({ warehouseId: "MAIN WH11", branchId: "" }), true);
 
-    // Location Does Not Contain
+    // Location / warehouse junk
     assert.equal(isPackingSellableLine({ warehouseId: "SPAREPARTS", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "DAMAGE", branchId: "MAIN" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "DISCOUNTED", branchId: "BACOLOD" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "EXPIRED", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "DEMO", branchId: "" }), false);
-
-    // Warehouse / Location Does Not Equal
-    assert.equal(isPackingSellableLine({ warehouseId: "MAIN WH11", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "SKYTECH", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "SKYTECHMNL", branchId: "" }), false);
-    assert.equal(isPackingSellableLine({ warehouseId: "MNL CAL WH", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "MNL-TECH", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "SKY ECOM", branchId: "" }), false);
     assert.equal(isPackingSellableLine({ warehouseId: "TESTING", branchId: "" }), false);
-
-    // Warehouse Does Not Contain TECH
     assert.equal(isPackingSellableLine({ warehouseId: "FOO-TECH-BAR", branchId: "" }), false);
 
-    // MAIN stays allowed
     assert.equal(isExcludedBranchAlias("MAIN"), false);
     assert.equal(isExcludedBranchAlias("MARILAO"), true);
     assert.equal(isExcludedBranchAlias("MNL-MRILAO"), true);
@@ -66,4 +63,21 @@ test("branch stock groups drop excluded warehouses from Acumatica filter", () =>
     assert.ok(!getStockWarehouseIdsForBranch("MANILA").includes("MNL-MRILAO"));
     assert.ok(getStockWarehouseIdsForBranch("MANILA").includes("MANILA"));
     assert.ok(getStockWarehouseIdsForBranch("BACOLOD").includes("BACOLOD"));
+});
+
+test("PO destinations keep related Manila / MAIN warehouses for packing match", () => {
+    const manila = getPoDestinationIdsForBranch("MANILA");
+    assert.ok(manila.includes("MANILA"));
+    assert.ok(manila.includes("MNL-MRILAO"));
+    assert.ok(manila.includes("MNL CAL WH"));
+    assert.ok(manila.includes("WH1"));
+
+    const main = getPoDestinationIdsForBranch("MAIN");
+    assert.ok(main.includes("MAIN"));
+    assert.ok(main.includes("MAIN WH11"));
+
+    // Selecting the satellite site still resolves the Manila group
+    const fromMarilao = getPoDestinationIdsForBranch("MNL-MRILAO");
+    assert.ok(fromMarilao.includes("MANILA"));
+    assert.ok(fromMarilao.includes("MNL-MRILAO"));
 });
