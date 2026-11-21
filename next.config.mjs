@@ -22,6 +22,23 @@ const nextConfig = {
   // Remove the X-Powered-By header to reduce response size + hide stack
   poweredByHeader: false,
 
+  // instrumentation → keep-alive → system-auth may be analyzed in the client
+  // graph; Node builtins must not break the browser bundle.
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...(config.resolve.fallback || {}),
+        fs: false,
+        path: false,
+        os: false,
+        net: false,
+        tls: false,
+        child_process: false,
+      };
+    }
+    return config;
+  },
+
   // Aggressive asset caching headers — Nginx will also set these for static files.
   // Skip Cache-Control on /_next/static in development — it breaks Next.js HMR/dev caching.
   async headers() {
