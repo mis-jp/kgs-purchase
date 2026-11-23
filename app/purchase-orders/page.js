@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { fetchWithAuth } from "@/lib/api-client";
 import InventoryDetailModal from "@/components/InventoryDetailModal";
 import PaginationBar from "@/components/PaginationBar";
@@ -468,6 +469,7 @@ const EMPTY_COLUMN_FILTERS = {
     containerNumber: "",
     date: "",
     etd: "",
+    lateMinDays: "",
     shipOutDate: "",
     eta: "",
     receivedDate: "",
@@ -487,6 +489,7 @@ const COLUMN_FILTER_META = [
     { key: "containerNumber", label: "Container" },
     { key: "date", label: "PO Date" },
     { key: "etd", label: "ETD" },
+    { key: "lateMinDays", label: "Days late" },
     { key: "shipOutDate", label: "Ship Out" },
     { key: "eta", label: "ETA" },
     { key: "receivedDate", label: "Received" },
@@ -495,6 +498,11 @@ const COLUMN_FILTER_META = [
     { key: "totalWeight", label: "Weight" },
     { key: "totalAmount", label: "Amount" },
 ];
+
+function parseLateMinDays(value) {
+    const n = parseInt(String(value ?? "").trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 const PO_STATUS_FILTER_OPTIONS = [
     "On Hold",
@@ -535,6 +543,8 @@ function poRowMatchesFilters(o, {
     if (!multiTextIncludes(ui.containerNumber, f.containerNumber)) return false;
     if (f.date && toDateKey(o.date) !== f.date) return false;
     if (f.etd && toDateKey(etdValue) !== f.etd) return false;
+    const lateMin = parseLateMinDays(f.lateMinDays);
+    if (lateMin > 0 && daysPastPromised(o) < lateMin) return false;
     if (!multiDateMatches(ui.shipOutDate, f.shipOutDate)) return false;
     if (!multiDateMatches(ui.eta, f.eta)) return false;
     if (!multiDateMatches(ui.receivedDate, f.receivedDate, o.receiptDate)) return false;
@@ -648,6 +658,14 @@ function PoDateInput({ value = "", onChange, className = "", style }) {
     );
 }
 
+/** Full remarks text for hover preview (joined multi-entry lines). */
+function remarksPreviewText(entries) {
+    return (entries || [])
+        .map((s) => String(s || "").trim())
+        .filter(Boolean)
+        .join("\n");
+}
+
 /** Stacked multi-value cell (container # / dates) — Excel-style vertical list. */
 function PoMultiEntryCell({
     entries,
@@ -658,10 +676,43 @@ function PoMultiEntryCell({
     placeholder = "",
     showAdd = true,
     showRemove = true,
+    hoverPreview = false,
 }) {
     const list = entries?.length ? entries : [""];
+    const preview = hoverPreview ? remarksPreviewText(list) : "";
+    const [tip, setTip] = useState(null);
+
+    useEffect(() => {
+        if (!tip) return undefined;
+        const onScroll = () => setTip(null);
+        window.addEventListener("scroll", onScroll, true);
+        return () => window.removeEventListener("scroll", onScroll, true);
+    }, [tip]);
+
+    const showTip = (el) => {
+        if (!preview) return;
+        const rect = el.getBoundingClientRect();
+        const maxW = Math.min(360, window.innerWidth - 24);
+        let left = rect.left;
+        if (left + maxW > window.innerWidth - 12) left = Math.max(12, window.innerWidth - maxW - 12);
+        const below = rect.bottom + 8;
+        const placeAbove = below + 160 > window.innerHeight && rect.top > 180;
+        setTip({
+            left,
+            top: placeAbove ? undefined : below,
+            bottom: placeAbove ? window.innerHeight - rect.top + 8 : undefined,
+            text: preview,
+        });
+    };
+
     return (
-        <div className="po-multi-entry">
+        <div
+            className={`po-multi-entry${hoverPreview && preview ? " has-remarks-preview" : ""}`}
+            onMouseEnter={hoverPreview && preview ? (e) => showTip(e.currentTarget) : undefined}
+            onMouseLeave={hoverPreview ? () => setTip(null) : undefined}
+            onFocus={hoverPreview && preview ? (e) => showTip(e.currentTarget) : undefined}
+            onBlur={hoverPreview ? () => setTip(null) : undefined}
+        >
             {list.map((value, i) => (
                 <div key={i} className="po-multi-entry-row">
                     {type === "date" ? (
@@ -709,6 +760,20 @@ function PoMultiEntryCell({
                 >
                     + Add
                 </button>
+            )}
+            {tip && typeof document !== "undefined" && createPortal(
+                <div
+                    className="po-remarks-popup"
+                    role="tooltip"
+                    style={{
+                        left: tip.left,
+                        top: tip.top,
+                        bottom: tip.bottom,
+                    }}
+                >
+                    {tip.text}
+                </div>,
+                document.body
             )}
         </div>
     );
@@ -1298,6 +1363,7 @@ export default function PurchaseOrdersPage() {
         debColumnFilters.origin,
         debColumnFilters.containerNumber,
         debColumnFilters.etd,
+        debColumnFilters.lateMinDays,
         debColumnFilters.shipOutDate,
         debColumnFilters.eta,
         debColumnFilters.receivedDate,
@@ -1795,6 +1861,7 @@ export default function PurchaseOrdersPage() {
             || f.branch
             || f.containerNumber
             || f.etd
+            || parseLateMinDays(f.lateMinDays)
             || f.shipOutDate
             || f.eta
             || f.receivedDate
@@ -1803,6 +1870,14 @@ export default function PurchaseOrdersPage() {
             || f.totalAmount
         );
     }, [columnFilters]);
+
+    const lateOnlyActive = parseLateMinDays(columnFilters.lateMinDays) > 0;
+    const toggleLateOnly = useCallback(() => {
+        setColumnFilters((prev) => ({
+            ...prev,
+            lateMinDays: parseLateMinDays(prev.lateMinDays) > 0 ? "" : "1",
+        }));
+    }, []);
 
     // Footer must match visible rows — never show a count when the table hid every row
     const clientHidEveryRow = orders.length > 0 && displayedOrders.length === 0;
@@ -1901,7 +1976,11 @@ export default function PurchaseOrdersPage() {
                                     title={`Clear ${col.label} filter`}
                                 >
                                     <span>{col.label}:</span>
-                                    <strong>{columnFilters[col.key]}</strong>
+                                    <strong>
+                                        {col.key === "lateMinDays"
+                                            ? `${columnFilters[col.key]}d`
+                                            : columnFilters[col.key]}
+                                    </strong>
                                     <span aria-hidden="true">×</span>
                                 </button>
                             ))}
@@ -1974,6 +2053,33 @@ export default function PurchaseOrdersPage() {
                             </select>
                             <IconChevronSelect />
                         </div>
+                    </div>
+
+                    <div className="po-filter-group po-late-toolbar-group" title="Open POs past ETD (Promised On)">
+                        <span className="po-filter-label">Days late:</span>
+                        <input
+                            id="po-late-min-days"
+                            type="number"
+                            min={1}
+                            inputMode="numeric"
+                            className="po-select-box po-late-toolbar-input"
+                            placeholder="e.g. 30"
+                            value={columnFilters.lateMinDays || ""}
+                            onChange={(e) => {
+                                const raw = e.target.value.replace(/[^\d]/g, "");
+                                setColumnFilter("lateMinDays", raw);
+                            }}
+                            aria-label="Minimum days late"
+                        />
+                        <button
+                            type="button"
+                            className={`po-late-only-chip${lateOnlyActive ? " is-active" : ""}`}
+                            onClick={toggleLateOnly}
+                            aria-pressed={lateOnlyActive}
+                            title={lateOnlyActive ? "Clear late filter" : "Show only late open POs"}
+                        >
+                            Late only
+                        </button>
                     </div>
 
                     <div className="db-search-wrapper po-search-container">
@@ -2285,12 +2391,13 @@ export default function PurchaseOrdersPage() {
                                                     onRemove={onLogisticsRemove}
                                                 />
                                             </td>
-                                            <td className="po-multi-entry-td" onClick={(e) => e.stopPropagation()}>
+                                            <td className="po-multi-entry-td po-col-remarks" onClick={(e) => e.stopPropagation()}>
                                                 <PoMultiEntryCell
                                                     entries={logistics.remarks}
                                                     placeholder="Remarks"
                                                     showAdd={false}
                                                     showRemove={false}
+                                                    hoverPreview
                                                     onChangeAt={(i, val) => handleLogisticsChange(key, "remarks", i, val, po.receiptDate)}
                                                     onAdd={onLogisticsAdd}
                                                     onRemove={onLogisticsRemove}

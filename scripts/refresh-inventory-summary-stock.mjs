@@ -148,16 +148,18 @@ async function main() {
     const idList = arg("--ids");
     const staleBefore = arg("--stale-before");
 
+    if (idList) {
+        ids.push(...idList.split(",").map((s) => s.trim()).filter(Boolean));
+    }
     if (po) {
         const [rows] = await pool.query(
             `SELECT DISTINCT inventory_id AS id FROM purchase_order_details WHERE order_nbr = ?`,
             [po]
         );
-        ids = rows.map((r) => String(r.id || "").trim()).filter(Boolean);
-        console.log(`PO ${po}: ${ids.length} SKUs`);
-    } else if (idList) {
-        ids = idList.split(",").map((s) => s.trim()).filter(Boolean);
-    } else if (staleBefore) {
+        ids.push(...rows.map((r) => String(r.id || "").trim()).filter(Boolean));
+        console.log(`PO ${po}: +${rows.length} SKUs`);
+    }
+    if (!ids.length && staleBefore) {
         const [rows] = await pool.query(
             `SELECT DISTINCT inventory_id AS id
              FROM forecast_item_stock
@@ -169,7 +171,8 @@ async function main() {
         );
         ids = rows.map((r) => String(r.id || "").trim()).filter(Boolean);
         console.log(`Stale MAIN before ${staleBefore}: ${ids.length} SKUs`);
-    } else {
+    }
+    if (!ids.length) {
         console.error("Usage: --po ORDER | --ids a,b | --stale-before YYYY-MM-DD");
         process.exit(1);
     }

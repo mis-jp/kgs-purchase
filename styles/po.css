@@ -337,6 +337,75 @@
     color: var(--status-danger, #e11d48);
 }
 
+.po-late-toolbar-group {
+    gap: 0.45rem;
+}
+
+.po-late-toolbar-input {
+    width: 5.5rem !important;
+    min-width: 5.5rem;
+}
+
+.po-late-only-chip {
+    border: 1px solid var(--border-medium);
+    background: var(--bg-surface, #fff);
+    color: var(--text-secondary);
+    border-radius: var(--radius-md, 8px);
+    font-size: 0.75rem;
+    font-weight: 650;
+    padding: 0.35rem 0.7rem;
+    height: 36px;
+    cursor: pointer;
+    white-space: nowrap;
+    line-height: 1;
+}
+
+.po-late-only-chip:hover {
+    border-color: var(--status-warning, #d97706);
+    color: var(--status-warning, #d97706);
+}
+
+.po-late-only-chip.is-active {
+    border-color: var(--status-warning, #d97706);
+    background: rgba(217, 119, 6, 0.12);
+    color: var(--status-warning, #d97706);
+}
+
+[data-theme="dark"] .po-late-only-chip {
+    background: var(--bg-main, #111827);
+}
+
+.po-table td.po-col-remarks {
+    overflow: visible;
+}
+
+.po-remarks-popup {
+    position: fixed;
+    z-index: 1200;
+    max-width: min(360px, calc(100vw - 24px));
+    max-height: min(240px, 40vh);
+    overflow: auto;
+    padding: 0.65rem 0.8rem;
+    border-radius: var(--radius-md, 8px);
+    border: 1px solid var(--border-medium);
+    background: var(--bg-surface, #111827);
+    color: var(--text-primary, #f9fafb);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    pointer-events: none;
+}
+
+[data-theme="light"] .po-remarks-popup,
+:root[data-theme="light"] .po-remarks-popup {
+    background: #fff;
+    color: #111827;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
 .po-past-promised-panel.is-alert {
     border-color: rgba(217, 119, 6, 0.45);
 }

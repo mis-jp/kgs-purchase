@@ -491,7 +491,7 @@ export default function PackingListTable({
                                 : ""}
                             — run Syncing Center → Inventory if Acumatica changed after that.
                             {!stockPlan.isMain
-                                ? ` Shown qty is sellable stock in ${String(branch).toUpperCase()} and MAIN only (SPAREPARTS, DAMAGE, DISCOUNTED, EXPIRED, DEMO, MAIN WH11, SKYTECH, SKYTECHMNL, MNL CAL WH, Marilao warehouse/MNL-MRILAO, MNL-TECH, SKY ECOM, TECH, TESTING left out; MAIN bins like MARILAO 15 stay).`
+                                ? ` Shown qty is sellable stock in ${String(branch).toUpperCase()} and MAIN only (SPAREPARTS, DAMAGE, DISCOUNTED, EXPIRED, DEMO, MAIN WH11, SKYTECH, SKYTECHMNL, MNL CAL WH, Marilao warehouse/location MARILAO/MNL-MRILAO, MNL-TECH, SKY ECOM, TECH, TESTING left out; MAIN shelf bins like MARILAO 15 stay).`
                                 : " Shown qty is sellable MAIN stock only (non-sellable locations/warehouses left out)."}
                             {!stockPlan.isMain &&
                                 (stockPlan.shortLines > 0

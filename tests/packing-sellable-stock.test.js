@@ -36,8 +36,10 @@ test("junk / tech sites are not packing-list sellable; related metro dests are",
     assert.equal(isPackingSellableLine({ warehouseId: "", branchId: "" }), true);
 });
 
-test("MAIN bin MARILAO 15 is sellable; DAMAGE location is not", () => {
+test("MAIN bin MARILAO 15 is sellable; bare MARILAO location is not", () => {
     assert.equal(isExcludedLocationAlias("MARILAO 15"), false);
+    assert.equal(isExcludedLocationAlias("MARILAO"), true);
+    assert.equal(isExcludedLocationAlias("MNL-MRILAO"), true);
     assert.equal(isExcludedLocationAlias("DAMAGE"), true);
     assert.equal(isExcludedLocationAlias("DISCOUNTED"), true);
     assert.equal(isExcludedBranchAlias("MARILAO 15"), false);
@@ -46,9 +48,29 @@ test("MAIN bin MARILAO 15 is sellable; DAMAGE location is not", () => {
         true
     );
     assert.equal(
+        isPackingSellableLine({ warehouseId: "MAIN", locationId: "MARILAO" }),
+        false
+    );
+    assert.equal(
         isPackingSellableLine({ warehouseId: "MAIN", locationId: "DAMAGE" }),
         false
     );
+});
+
+test("MAIN sellable qty drops bare MARILAO location but keeps MARILAO 15", () => {
+    // Sofie vinyl staff case: MAIN locations 15-E… = 0, MARILAO = 42, MARILAO 15 = shelf.
+    const rows = [
+        { loc: "15-E19 3-2", avail: 0 },
+        { loc: "15-E22 2-2", avail: 0 },
+        { loc: "MARILAO", avail: 42 },
+        { loc: "MARILAO 15", avail: 10 },
+    ];
+    let sellable = 0;
+    for (const r of rows) {
+        if (isExcludedLocationAlias(r.loc)) continue;
+        sellable += r.avail;
+    }
+    assert.equal(sellable, 10);
 });
 
 test("branch stock groups drop excluded warehouses from Acumatica filter", () => {
