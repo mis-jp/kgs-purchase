@@ -312,7 +312,7 @@ export async function requireInventoryUser(request) {
 }
 
 /** Temporary pilot list (Joyce and MIS). `KC_INVENTORY_ALLOWED_LOGIN_IDS` overrides it; `*` opens Inventory to everyone. */
-const DEFAULT_ALLOWED_LOGIN_IDS = "KG0751,KG0089,KG0452,KG0543,KG0882";
+const DEFAULT_ALLOWED_LOGIN_IDS = "KG0751,KG0089,KG0452,KG0543,KG0882,KC0035";
 
 export function allowedLoginIds(raw = process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS) {
     const value = String(raw || DEFAULT_ALLOWED_LOGIN_IDS).trim();

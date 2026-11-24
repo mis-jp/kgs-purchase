@@ -43,7 +43,7 @@ test('local HS256: valid token gives the login id and name', async () => {
 });
 
 test('allowed list: defaults to the pilot ids, * opens to everyone', () => {
-  const pilot = ['KG0751', 'KG0089', 'KG0452', 'KG0543', 'KG0882'];
+  const pilot = ['KG0751', 'KG0089', 'KG0452', 'KG0543', 'KG0882', 'KC0035'];
   assert.deepEqual([...allowedLoginIds(null)], pilot);
   assert.deepEqual([...allowedLoginIds('')], pilot);
   assert.deepEqual([...allowedLoginIds(' kg1 , KG2 ')], ['KG1', 'KG2']);
