@@ -306,7 +306,10 @@ export async function requireInventoryUser(request) {
             "The Inventory server could not match your KelinConnect account to your employee ID (no login id).");
     }
     if (allowed && !allowed.has(String(user.loginId).toUpperCase())) {
-        throw new HttpError(403, "Inventory is not open to your account yet.");
+        // Admin → Users grants also open Inventory (active inv_users row), not only the pilot list.
+        if (!(await inventoryAccessHooks.hasActiveUser(user.loginId))) {
+            throw new HttpError(403, "Inventory is not open to your account yet.");
+        }
     }
     return { user };
 }
@@ -319,6 +322,32 @@ export function allowedLoginIds(raw = process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS
     if (value === "*") return null;
     return new Set(value.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean));
 }
+
+/**
+ * True when Inventory Admin → Users has an active row for this login id.
+ * Used so newly granted people are not blocked by the temporary pilot allowlist.
+ * Fail closed (false) when the ledger DB is unreachable.
+ */
+export async function hasActiveInventoryUser(loginId) {
+    const id = String(loginId || "").trim().toUpperCase();
+    if (!/^[A-Z0-9._-]{2,50}$/.test(id)) return false;
+    try {
+        const { getLedgerPool } = await import("./ledger-db.js");
+        const [[row]] = await getLedgerPool().query(
+            "SELECT 1 AS ok FROM inv_users WHERE login_id = ? AND status = 'active' LIMIT 1",
+            [id]
+        );
+        return Boolean(row);
+    } catch (err) {
+        console.warn("[KC Inventory auth] inv_users grant check failed", err?.message || err);
+        return false;
+    }
+}
+
+/** Tests may replace `hasActiveUser`; production uses `hasActiveInventoryUser`. */
+export const inventoryAccessHooks = {
+    hasActiveUser: hasActiveInventoryUser,
+};
 
 export function publicUser(ctx) {
     return { loginId: ctx.user.loginId, name: ctx.user.name, allBranches: true };

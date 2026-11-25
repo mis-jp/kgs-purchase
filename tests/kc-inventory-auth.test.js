@@ -56,11 +56,28 @@ test('allowed list: other employees get 403', async () => {
   try {
     const ok = await requireInventoryUser(req(sign({ loginid: 'kg0089', name: 'Joyce', exp: future() })));
     assert.equal(ok.user.loginId, 'kg0089');
+    // No MYSQL / no inv_users grant → still blocked by the pilot list.
     await assert.rejects(
       requireInventoryUser(req(sign({ loginid: 'KG0543', exp: future() }))),
       (e) => e.status === 403
     );
   } finally {
+    process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = '*';
+    delete process.env.KC_JWT_SECRET;
+  }
+});
+
+test('allowed list: active inv_users grant opens Inventory outside the pilot list', async () => {
+  process.env.KC_JWT_SECRET = 'test-secret';
+  process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = 'KG0751,KG0089';
+  const auth = await import('../app/api/flutter-kelinconnect-inventory/_lib/auth.js');
+  const real = auth.inventoryAccessHooks.hasActiveUser;
+  auth.inventoryAccessHooks.hasActiveUser = async (loginId) => String(loginId).toUpperCase() === 'KG9999';
+  try {
+    const ctx = await requireInventoryUser(req(sign({ loginid: 'KG9999', name: 'Granted', exp: future() })));
+    assert.equal(ctx.user.loginId, 'KG9999');
+  } finally {
+    auth.inventoryAccessHooks.hasActiveUser = real;
     process.env.KC_INVENTORY_ALLOWED_LOGIN_IDS = '*';
     delete process.env.KC_JWT_SECRET;
   }
