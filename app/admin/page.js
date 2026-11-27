@@ -22,6 +22,40 @@ const EMPTY_FORM = {
     modules: [],
 };
 
+const ADMIN_TABS = [
+    { id: "users", label: "Users" },
+    { id: "access", label: "Access review" },
+    { id: "sync", label: "Sync health" },
+    { id: "settings", label: "Settings" },
+];
+
+const HASH_TO_TAB = {
+    users: "users",
+    access: "access",
+    "access-review": "access",
+    sync: "sync",
+    "sync-health": "sync",
+    settings: "settings",
+};
+
+function userInitials(user) {
+    const source = String(user?.fullName || user?.username || "?").trim();
+    const parts = source.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+    return source.slice(0, 2).toUpperCase();
+}
+
+function branchSummary(user) {
+    if (user.role === "admin" || user.allBranches) {
+        return { text: "All branches", title: "All branches" };
+    }
+    const ids = user.branchIds || [];
+    if (!ids.length) return { text: "None", title: "No branches assigned" };
+    const full = ids.join(", ");
+    if (ids.length <= 2) return { text: full, title: full };
+    return { text: `${ids.slice(0, 2).join(", ")} +${ids.length - 2}`, title: full };
+}
+
 export default function AdminPage() {
     const router = useRouter();
     const [me, setMe] = useState(null);
@@ -40,7 +74,11 @@ export default function AdminPage() {
     const [savingWindow, setSavingWindow] = useState(false);
     const [branchMenuOpen, setBranchMenuOpen] = useState(false);
     const [branchQuery, setBranchQuery] = useState("");
+    const [tab, setTab] = useState("users");
+    const [userQuery, setUserQuery] = useState("");
+    const [roleFilter, setRoleFilter] = useState("all");
     const branchPickerRef = useRef(null);
+    const formPanelRef = useRef(null);
 
     const branchLabel = (b) => (b?.name && b.name !== b.id ? `${b.id} — ${b.name}` : (b?.id || ""));
 
@@ -56,6 +94,27 @@ export default function AdminPage() {
             return label.includes(q);
         });
     }, [branchOptions, branchQuery]);
+
+    const userStats = useMemo(() => {
+        const admins = users.filter((u) => u.role === "admin").length;
+        const active = users.filter((u) => u.active !== false).length;
+        return {
+            total: users.length,
+            admins,
+            active,
+            inactive: users.length - active,
+        };
+    }, [users]);
+
+    const visibleUsers = useMemo(() => {
+        const q = userQuery.trim().toLowerCase();
+        return users.filter((u) => {
+            if (roleFilter !== "all" && u.role !== roleFilter) return false;
+            if (!q) return true;
+            const hay = `${u.username || ""} ${u.fullName || ""} ${u.email || ""}`.toLowerCase();
+            return hay.includes(q);
+        });
+    }, [users, userQuery, roleFilter]);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -138,6 +197,25 @@ export default function AdminPage() {
         };
     }, [branchMenuOpen]);
 
+    useEffect(() => {
+        const hash = window.location.hash.replace(/^#/, "");
+        const next = HASH_TO_TAB[hash];
+        if (!next || next === "users") return undefined;
+        const timer = window.setTimeout(() => setTab(next), 0);
+        return () => window.clearTimeout(timer);
+    }, []);
+
+    useEffect(() => {
+        if (tab !== "users" || !editingId) return;
+        formPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, [editingId, tab]);
+
+    const selectTab = (id) => {
+        setTab(id);
+        const next = `${window.location.pathname}${window.location.search}#${id}`;
+        window.history.replaceState(null, "", next);
+    };
+
     const resetForm = () => {
         setEditingId(null);
         setForm(EMPTY_FORM);
@@ -187,6 +265,7 @@ export default function AdminPage() {
         setBranchQuery("");
         setNotice("");
         setError("");
+        setTab("users");
     };
 
     const handleSaveUser = async (e) => {
@@ -330,101 +409,82 @@ export default function AdminPage() {
         <div className="admin-root">
             <header className="admin-header" data-tour="page-title">
                 <div>
-                    <h1>Admin — User Accounts</h1>
-                    <p>Create and manage local logins for KGS Purchasing. ERP data still uses system Acumatica credentials.</p>
+                    <p className="admin-kicker">Administration</p>
+                    <h1>Admin</h1>
+                    <p>People, access, sync, and replenishment settings. Each area is on its own tab so the page stays one task at a time.</p>
                 </div>
+                {me?.username && (
+                    <div className="admin-signed-in">
+                        <span className="admin-avatar" aria-hidden="true">{userInitials(me)}</span>
+                        <span>
+                            <strong>{me.fullName || me.username}</strong>
+                            <span>{me.username}</span>
+                        </span>
+                    </div>
+                )}
             </header>
 
             {error && <div className="admin-alert admin-alert--error" role="alert">{error}</div>}
             {notice && <div className="admin-alert admin-alert--ok" role="status">{notice}</div>}
 
-            <SyncHealthPanel />
-
-            <AccessReviewPanel onChanged={load} />
-
-            <section className="admin-card">
-                <h2>Replenishment sales window</h2>
-                <p className="admin-header-hint">
-                    Sells per day, days left, and order quantity use this sales window for every branch.
-                    The default is 3 months. Choose days or months, then save to recalculate Replenishment.
-                </p>
-                <form className="admin-form" onSubmit={handleSaveSalesWindow}>
-                    <div className="admin-form-grid">
-                        <label>
-                            Amount
-                            <input
-                                type="number"
-                                min={1}
-                                max={salesUnit === "days" ? 720 : 24}
-                                step={1}
-                                value={salesMonths}
-                                onChange={(e) => setSalesMonths(e.target.value)}
-                                required
-                            />
-                        </label>
-                        <label>
-                            Unit
-                            <select value={salesUnit} onChange={(e) => setSalesUnit(e.target.value === "days" ? "days" : "months")}>
-                                <option value="months">Months</option>
-                                <option value="days">Days</option>
-                            </select>
-                        </label>
-                    </div>
-                    <button type="submit" className="admin-btn" disabled={savingWindow}>
-                        {savingWindow ? "Updating…" : "Update all branches"}
+            <div className="admin-tabs" role="tablist" aria-label="Admin sections">
+                {ADMIN_TABS.map((item) => (
+                    <button
+                        key={item.id}
+                        type="button"
+                        role="tab"
+                        id={`admin-tab-${item.id}`}
+                        aria-selected={tab === item.id}
+                        aria-controls={`admin-panel-${item.id}`}
+                        className={`admin-tab${tab === item.id ? " is-active" : ""}`}
+                        onClick={() => selectTab(item.id)}
+                    >
+                        {item.label}
+                        {item.id === "users" && <span className="admin-tab-count">{userStats.total}</span>}
                     </button>
-                </form>
-            </section>
+                ))}
+            </div>
 
-            <section className="admin-card">
-                <h2>My account</h2>
-                <p className="admin-header-hint">
-                    To change your password, open{" "}
-                    <Link href="/account">Account</Link> in the sidebar.
-                </p>
-                <form className="admin-form" onSubmit={handleSaveProfile}>
-                    <div className="admin-form-grid">
-                        <label>
-                            Username
-                            <input
-                                value={profile.username}
-                                onChange={(e) => setProfile((p) => ({ ...p, username: e.target.value }))}
-                                required
-                                autoComplete="username"
-                            />
-                        </label>
-                        <label>
-                            Full name
-                            <input
-                                value={profile.fullName}
-                                onChange={(e) => setProfile((p) => ({ ...p, fullName: e.target.value }))}
-                            />
-                        </label>
-                        <label>
-                            Email
-                            <input
-                                type="email"
-                                value={profile.email}
-                                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
-                            />
-                        </label>
-                    </div>
-                    <button type="submit" className="admin-btn" disabled={savingProfile}>
-                        {savingProfile ? "Saving…" : "Save my account"}
-                    </button>
-                </form>
-            </section>
+            {tab === "users" && (
+            <div className="admin-panel" role="tabpanel" id="admin-panel-users" aria-labelledby="admin-tab-users">
+            <div className="admin-stats" aria-label="User totals">
+                <div className="admin-stat">
+                    <span className="admin-stat-label">Accounts</span>
+                    <strong className="admin-stat-value">{userStats.total}</strong>
+                </div>
+                <div className="admin-stat">
+                    <span className="admin-stat-label">Admins</span>
+                    <strong className="admin-stat-value">{userStats.admins}</strong>
+                </div>
+                <div className="admin-stat">
+                    <span className="admin-stat-label">Active</span>
+                    <strong className="admin-stat-value">{userStats.active}</strong>
+                </div>
+                <div className="admin-stat">
+                    <span className="admin-stat-label">Inactive</span>
+                    <strong className="admin-stat-value">{userStats.inactive}</strong>
+                </div>
+            </div>
 
-            <section className="admin-card" data-tour="toolbar">
+            <div className="admin-workspace">
+
+            <section className="admin-card admin-form-card" data-tour="toolbar" ref={formPanelRef}>
                 <div className="admin-card-head">
-                    <h2>{editingId ? "Edit user" : "Create user"}</h2>
+                    <div>
+                        <h2>{editingId ? "Edit user" : "New user"}</h2>
+                        <p className="admin-card-sub">
+                            {editingId ? "Update this login. Leave the password blank to keep the current one." : "Add a local login. Acumatica still uses the system credentials."}
+                        </p>
+                    </div>
                     {editingId && (
                         <button type="button" className="admin-btn admin-btn--ghost" onClick={resetForm}>
-                            Cancel edit
+                            Cancel
                         </button>
                     )}
                 </div>
                 <form className="admin-form" onSubmit={handleSaveUser}>
+                    <div className="admin-form-block">
+                        <h3>Account</h3>
                     <div className="admin-form-grid">
                         <label>
                             Username
@@ -460,6 +520,11 @@ export default function AdminPage() {
                                 onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                             />
                         </label>
+                    </div>
+                    </div>
+                    <div className="admin-form-block">
+                        <h3>Access</h3>
+                    <div className="admin-form-grid">
                         <label>
                             Role
                             <select
@@ -492,15 +557,18 @@ export default function AdminPage() {
                                 <option value="selected">Only selected modules</option>
                             </select>
                         </label>
-                        <label className="admin-check">
+                    </div>
+                        <label className="admin-check admin-check--switch">
                             <input
                                 type="checkbox"
                                 checked={form.active}
                                 onChange={(e) => setForm((f) => ({ ...f, active: e.target.checked }))}
                             />
-                            Active
+                            <span>
+                                <strong>{form.active ? "Active" : "Inactive"}</strong>
+                                <span>{form.active ? "This person can sign in." : "This person cannot sign in."}</span>
+                            </span>
                         </label>
-                    </div>
                     {form.role === "user" && !form.allModules && (
                         <fieldset className="admin-module-picker">
                             <legend>Modules this account can open</legend>
@@ -636,21 +704,58 @@ export default function AdminPage() {
                             </>
                         )}
                     </div>
-                    <button type="submit" className="admin-btn" disabled={saving}>
-                        {saving ? "Saving…" : editingId ? "Update user" : "Create user"}
-                    </button>
+                    </div>
+                    <div className="admin-form-actions">
+                        <button type="submit" className="admin-btn" disabled={saving}>
+                            {saving ? "Saving…" : editingId ? "Save changes" : "Create user"}
+                        </button>
+                    </div>
                 </form>
             </section>
 
-            <section className="admin-card" data-tour="main-table">
-                <h2>All users ({users.length})</h2>
+            <section className="admin-card admin-directory" data-tour="main-table">
+                <div className="admin-card-head">
+                    <div>
+                        <h2>Directory</h2>
+                        <p className="admin-card-sub">
+                            {visibleUsers.length === users.length
+                                ? `${users.length} ${users.length === 1 ? "account" : "accounts"}`
+                                : `${visibleUsers.length} of ${users.length} accounts`}
+                        </p>
+                    </div>
+                </div>
+                <div className="admin-directory-bar">
+                    <input
+                        type="search"
+                        className="admin-search"
+                        value={userQuery}
+                        onChange={(e) => setUserQuery(e.target.value)}
+                        placeholder="Search name, username, or email"
+                        aria-label="Search users"
+                    />
+                    <div className="admin-role-filters" role="group" aria-label="Filter by role">
+                        {[
+                            ["all", "All"],
+                            ["admin", "Admins"],
+                            ["user", "Users"],
+                        ].map(([id, label]) => (
+                            <button
+                                key={id}
+                                type="button"
+                                className={`admin-role-filter${roleFilter === id ? " is-active" : ""}`}
+                                aria-pressed={roleFilter === id}
+                                onClick={() => setRoleFilter(id)}
+                            >
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
                 <div className="admin-table-wrap">
                     <table className="admin-table">
                         <thead>
                             <tr>
-                                <th>Username</th>
-                                <th>Name</th>
-                                <th>Email</th>
+                                <th>User</th>
                                 <th>Role</th>
                                 <th>Modules</th>
                                 <th>Branches</th>
@@ -661,37 +766,44 @@ export default function AdminPage() {
                         <tbody>
                             {users.length === 0 ? (
                                 <tr>
-                                    <td colSpan={8} className="admin-empty">No users yet.</td>
+                                    <td colSpan={6} className="admin-empty">No users yet. Create the first account in the form.</td>
+                                </tr>
+                            ) : visibleUsers.length === 0 ? (
+                                <tr>
+                                    <td colSpan={6} className="admin-empty">No accounts match this search.</td>
                                 </tr>
                             ) : (
-                                users.map((u) => {
+                                visibleUsers.map((u) => {
                                     const isSelf = Number(u.id) === Number(me?.id);
+                                    const branches = branchSummary(u);
+                                    const allModules = u.role === "admin" || !(u.allowedModules || []).length;
+                                    const moduleText = allModules ? "All modules" : moduleAccessLabel(u.allowedModules);
                                     return (
-                                    <tr key={u.id}>
+                                    <tr key={u.id} className={editingId === u.id ? "is-editing" : undefined}>
                                         <td>
-                                            {u.username}
-                                            {isSelf ? <span className="admin-you"> (you)</span> : null}
+                                            <div className="admin-user-cell">
+                                                <span className={`admin-avatar${u.role === "admin" ? " is-admin" : ""}`} aria-hidden="true">
+                                                    {userInitials(u)}
+                                                </span>
+                                                <div>
+                                                    <div className="admin-user-name">
+                                                        <strong>{u.username}</strong>
+                                                        {isSelf ? <span className="admin-you">You</span> : null}
+                                                    </div>
+                                                    <div className="admin-user-sub">{u.fullName || "No name"}{u.email ? ` · ${u.email}` : ""}</div>
+                                                </div>
+                                            </div>
                                         </td>
-                                        <td>{u.fullName || "—"}</td>
-                                        <td>{u.email || "—"}</td>
                                         <td>
                                             <span className={`admin-badge admin-badge--${u.role}`}>{u.role}</span>
                                         </td>
+                                        <td className="admin-clip" title={moduleText}>{moduleText}</td>
+                                        <td className="admin-clip" title={branches.title}>{branches.text}</td>
                                         <td>
-                                            {u.role === "admin" || !(u.allowedModules || []).length ? (
-                                                <span>All modules</span>
-                                            ) : (
-                                                <span className="admin-badge admin-badge--forecast">{moduleAccessLabel(u.allowedModules)}</span>
-                                            )}
+                                            <span className={`admin-status${u.active ? " admin-status--on" : " admin-status--off"}`}>
+                                                {u.active ? "Active" : "Inactive"}
+                                            </span>
                                         </td>
-                                        <td className="admin-branches-cell">
-                                            {u.role === "admin" || u.allBranches
-                                                ? "All branches"
-                                                : (u.branchIds || []).length
-                                                    ? (u.branchIds || []).join(", ")
-                                                    : "None"}
-                                        </td>
-                                        <td>{u.active ? "Active" : "Inactive"}</td>
                                         <td className="admin-actions">
                                             <button type="button" className="admin-link" onClick={() => startEdit(u)}>
                                                 Edit
@@ -718,6 +830,102 @@ export default function AdminPage() {
                     </table>
                 </div>
             </section>
+            </div>
+            </div>
+            )}
+
+            {tab === "access" && (
+                <div className="admin-panel" role="tabpanel" id="admin-panel-access" aria-labelledby="admin-tab-access">
+                    <AccessReviewPanel onChanged={load} />
+                </div>
+            )}
+
+            {tab === "sync" && (
+                <div className="admin-panel" role="tabpanel" id="admin-panel-sync" aria-labelledby="admin-tab-sync">
+                    <SyncHealthPanel />
+                </div>
+            )}
+
+            {tab === "settings" && (
+                <div className="admin-panel admin-settings-grid" role="tabpanel" id="admin-panel-settings" aria-labelledby="admin-tab-settings">
+                    <section className="admin-card">
+                        <h2>Replenishment sales window</h2>
+                        <p className="admin-header-hint">
+                            Sells per day, days left, and order quantity use this window for every branch.
+                            The default is 3 months.
+                        </p>
+                        <form className="admin-form" onSubmit={handleSaveSalesWindow}>
+                            <div className="admin-form-grid">
+                                <label>
+                                    Amount
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={salesUnit === "days" ? 720 : 24}
+                                        step={1}
+                                        value={salesMonths}
+                                        onChange={(e) => setSalesMonths(e.target.value)}
+                                        required
+                                    />
+                                </label>
+                                <label>
+                                    Unit
+                                    <select value={salesUnit} onChange={(e) => setSalesUnit(e.target.value === "days" ? "days" : "months")}>
+                                        <option value="months">Months</option>
+                                        <option value="days">Days</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div className="admin-form-actions">
+                                <button type="submit" className="admin-btn" disabled={savingWindow}>
+                                    {savingWindow ? "Updating…" : "Update all branches"}
+                                </button>
+                            </div>
+                        </form>
+                    </section>
+
+                    <section className="admin-card">
+                        <h2>My account</h2>
+                        <p className="admin-header-hint">
+                            Name and email for this admin login. To change your password, open{" "}
+                            <Link href="/account">Account</Link>.
+                        </p>
+                        <form className="admin-form" onSubmit={handleSaveProfile}>
+                            <div className="admin-form-grid">
+                                <label>
+                                    Username
+                                    <input
+                                        value={profile.username}
+                                        onChange={(e) => setProfile((p) => ({ ...p, username: e.target.value }))}
+                                        required
+                                        autoComplete="username"
+                                    />
+                                </label>
+                                <label>
+                                    Full name
+                                    <input
+                                        value={profile.fullName}
+                                        onChange={(e) => setProfile((p) => ({ ...p, fullName: e.target.value }))}
+                                    />
+                                </label>
+                                <label>
+                                    Email
+                                    <input
+                                        type="email"
+                                        value={profile.email}
+                                        onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
+                                    />
+                                </label>
+                            </div>
+                            <div className="admin-form-actions">
+                                <button type="submit" className="admin-btn" disabled={savingProfile}>
+                                    {savingProfile ? "Saving…" : "Save my account"}
+                                </button>
+                            </div>
+                        </form>
+                    </section>
+                </div>
+            )}
         </div>
     );
 }

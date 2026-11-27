@@ -145,7 +145,11 @@ export default function SyncHealthPanel() {
                         ))}
                     </div>
 
-                    <h3 className="sync-health-subhead">Sync steps</h3>
+                    <details className="admin-disclosure">
+                        <summary>
+                            <span>Sync steps</span>
+                            <span className="admin-disclosure-meta">{data.sections.length}</span>
+                        </summary>
                     <div className="admin-table-wrap">
                         <table className="admin-table">
                             <thead>
@@ -175,10 +179,15 @@ export default function SyncHealthPanel() {
                             </tbody>
                         </table>
                     </div>
+                    </details>
 
-                    <h3 className="sync-health-subhead">
-                        Background jobs{data.jobs?.pending ? ` (${data.jobs.pending} waiting or running)` : ""}
-                    </h3>
+                    <details className="admin-disclosure">
+                        <summary>
+                            <span>Background jobs</span>
+                            <span className="admin-disclosure-meta">
+                                {data.jobs?.pending ? `${data.jobs.pending} active` : jobs.length}
+                            </span>
+                        </summary>
                     <div className="admin-table-wrap">
                         <table className="admin-table">
                             <thead>
@@ -208,6 +217,7 @@ export default function SyncHealthPanel() {
                             </tbody>
                         </table>
                     </div>
+                    </details>
                 </>
             )}
         </section>
